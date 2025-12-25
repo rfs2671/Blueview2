@@ -201,6 +201,20 @@ export default function AddWorkerScreen() {
             />
           </View>
 
+          {/* OSHA Number */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>OSHA Number</Text>
+            <TextInput
+              style={styles.input}
+              value={formData.osha_number}
+              onChangeText={(text) => setFormData({ ...formData, osha_number: text })}
+              placeholder="e.g., 12345678"
+              placeholderTextColor={COLORS.textMuted}
+              keyboardType="default"
+              autoCapitalize="characters"
+            />
+          </View>
+
           {/* Certifications */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Certifications</Text>
