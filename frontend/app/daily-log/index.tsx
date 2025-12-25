@@ -492,13 +492,10 @@ export default function DailyLogScreen() {
                   {/* Work Description */}
                   <View style={styles.descriptionSection}>
                     <Text style={styles.subLabel}>Work Performed Today</Text>
-                    <TextInput
-                      style={styles.descriptionInput}
-                      value={card.work_description}
+                    <VoiceInput
+                      value={card.work_description || ''}
                       onChangeText={(text) => updateCard(index, { work_description: text })}
-                      placeholder="Describe work performed..."
-                      placeholderTextColor={COLORS.textMuted}
-                      multiline
+                      placeholder="Describe work performed... (tap mic to speak)"
                       editable={!isSubmitted}
                     />
                   </View>
