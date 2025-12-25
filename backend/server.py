@@ -170,6 +170,8 @@ def create_project(project: ProjectCreate):
     project_dict["updated_at"] = datetime.utcnow()
     result = projects_collection.insert_one(project_dict)
     project_dict["id"] = str(result.inserted_id)
+    if "_id" in project_dict:
+        del project_dict["_id"]
     return project_dict
 
 @app.get("/api/projects")
