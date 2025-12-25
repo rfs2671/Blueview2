@@ -25,6 +25,7 @@ interface Worker {
   name: string;
   trade: string;
   company: string;
+  osha_number?: string;
   certifications: string[];
   signature?: string;
 }
@@ -41,6 +42,7 @@ export default function WorkerDetailScreen() {
     name: '',
     trade: '',
     company: '',
+    osha_number: '',
   });
 
   useEffect(() => {
@@ -55,6 +57,7 @@ export default function WorkerDetailScreen() {
         name: data.name,
         trade: data.trade,
         company: data.company,
+        osha_number: data.osha_number || '',
       });
     } catch (error) {
       Alert.alert('Error', 'Failed to load worker details');
