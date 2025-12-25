@@ -89,6 +89,7 @@ export default function DailyLogScreen() {
   const [activeCardIndex, setActiveCardIndex] = useState<number | null>(null);
   const [photoDescription, setPhotoDescription] = useState('');
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [showMarkup, setShowMarkup] = useState(false);
 
   const today = format(new Date(), 'yyyy-MM-dd');
 
