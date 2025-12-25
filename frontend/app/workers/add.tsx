@@ -42,6 +42,7 @@ export default function AddWorkerScreen() {
     name: '',
     trade: '',
     company: '',
+    osha_number: '',
     certifications: [] as string[],
   });
   const [showTrades, setShowTrades] = useState(false);
