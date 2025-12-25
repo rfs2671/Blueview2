@@ -194,10 +194,18 @@ export default function HomeScreen() {
         />
 
         <QuickActionCard
-          icon="qr-code"
-          title="Check-In"
-          subtitle="Scan QR to check in workers"
+          icon="scan"
+          title="QR Scanner"
+          subtitle="Scan project QR to check in"
           color={COLORS.success}
+          onPress={() => handleNavigation('/scan')}
+        />
+
+        <QuickActionCard
+          icon="people"
+          title="Manual Check-In"
+          subtitle="Check in workers manually"
+          color="#9C27B0"
           onPress={() => handleNavigation('/checkin')}
         />
 
