@@ -115,7 +115,8 @@ def create_worker(worker: WorkerCreate):
     worker_dict["updated_at"] = datetime.utcnow()
     result = workers_collection.insert_one(worker_dict)
     worker_dict["id"] = str(result.inserted_id)
-    del worker_dict["_id"] if "_id" in worker_dict else None
+    if "_id" in worker_dict:
+        del worker_dict["_id"]
     return worker_dict
 
 @app.get("/api/workers")
