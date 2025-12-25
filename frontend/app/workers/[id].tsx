@@ -217,6 +217,25 @@ export default function WorkerDetailScreen() {
                 <Text style={styles.infoValue}>{worker.company}</Text>
               )}
             </View>
+
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>OSHA Number</Text>
+              {isEditing ? (
+                <TextInput
+                  style={styles.infoInput}
+                  value={formData.osha_number}
+                  onChangeText={(text) =>
+                    setFormData({ ...formData, osha_number: text })
+                  }
+                  placeholder="Enter OSHA Number"
+                  placeholderTextColor={COLORS.textMuted}
+                />
+              ) : (
+                <Text style={styles.infoValue}>
+                  {worker.osha_number || 'Not provided'}
+                </Text>
+              )}
+            </View>
           </View>
 
           {/* Certifications */}
