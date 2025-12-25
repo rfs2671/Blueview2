@@ -52,6 +52,7 @@ class WorkerCreate(BaseModel):
     name: str
     trade: str
     company: str
+    osha_number: Optional[str] = None  # OSHA certification number
     certifications: List[str] = []
     signature: Optional[str] = None  # base64 signature image
 
@@ -59,6 +60,7 @@ class WorkerUpdate(BaseModel):
     name: Optional[str] = None
     trade: Optional[str] = None
     company: Optional[str] = None
+    osha_number: Optional[str] = None
     certifications: Optional[List[str]] = None
     signature: Optional[str] = None
 
