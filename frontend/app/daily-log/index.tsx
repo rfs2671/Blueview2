@@ -777,8 +777,18 @@ export default function DailyLogScreen() {
                   >
                     <Text style={styles.photoRetakeText}>Retake</Text>
                   </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.markupButton}
+                    onPress={() => {
+                      setShowPhotoModal(false);
+                      setShowMarkup(true);
+                    }}
+                  >
+                    <Ionicons name="brush" size={18} color={COLORS.text} />
+                    <Text style={styles.markupButtonText}>Markup</Text>
+                  </TouchableOpacity>
                   <TouchableOpacity style={styles.photoSave} onPress={addPhotoToCard}>
-                    <Text style={styles.photoSaveText}>Add Photo</Text>
+                    <Text style={styles.photoSaveText}>Save</Text>
                   </TouchableOpacity>
                 </View>
               </>
@@ -786,6 +796,22 @@ export default function DailyLogScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Photo Markup Modal */}
+      {showMarkup && selectedPhoto && (
+        <PhotoMarkup
+          imageUri={selectedPhoto}
+          onSave={(markedUri) => {
+            setSelectedPhoto(markedUri);
+            setShowMarkup(false);
+            setShowPhotoModal(true);
+          }}
+          onCancel={() => {
+            setShowMarkup(false);
+            setShowPhotoModal(true);
+          }}
+        />
+      )}
     </SafeAreaView>
   );
 }
