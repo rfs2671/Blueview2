@@ -245,6 +245,8 @@ def create_checkin(checkin: CheckInCreate):
     }
     result = checkins_collection.insert_one(checkin_dict)
     checkin_dict["id"] = str(result.inserted_id)
+    if "_id" in checkin_dict:
+        del checkin_dict["_id"]
     return checkin_dict
 
 @app.post("/api/checkins/{checkin_id}/checkout")
