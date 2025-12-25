@@ -22,6 +22,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../src/constants/colors';
 import { api } from '../../src/utils/api';
 import { format } from 'date-fns';
+import PhotoMarkup from '../../src/components/PhotoMarkup';
+import VoiceInput from '../../src/components/VoiceInput';
 
 interface Project {
   id: string;
