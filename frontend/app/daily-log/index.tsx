@@ -1255,6 +1255,21 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: COLORS.text,
   },
+  markupButton: {
+    flex: 1,
+    flexDirection: 'row',
+    backgroundColor: COLORS.secondary,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  markupButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: COLORS.text,
+  },
   photoSave: {
     flex: 1,
     backgroundColor: COLORS.primary,
