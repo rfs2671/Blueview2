@@ -323,6 +323,8 @@ def create_daily_log(daily_log: DailyLogCreate):
     log_dict["status"] = "draft"
     result = daily_logs_collection.insert_one(log_dict)
     log_dict["id"] = str(result.inserted_id)
+    if "_id" in log_dict:
+        del log_dict["_id"]
     return log_dict
 
 @app.get("/api/daily-logs/project/{project_id}")
