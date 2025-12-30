@@ -16,7 +16,7 @@ import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../src/contexts/AuthContext';
-import { COLORS } from '../../src/constants/colors';
+import { COLORS } from '../src/constants/colors';
 
 export default function LoginScreen() {
   const router = useRouter();
