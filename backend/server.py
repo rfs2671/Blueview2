@@ -986,6 +986,62 @@ async def send_project_report(project_id: str, background_tasks: BackgroundTasks
 
 # ============== DROPBOX INTEGRATION ==============
 
+@app.get("/api/dropbox/auth-url")
+def get_dropbox_auth_url(current_user: dict = Depends(require_cp_or_admin)):
+    """Generate Dropbox OAuth URL for user to authorize"""
+    if not DROPBOX_APP_KEY or not DROPBOX_APP_SECRET:
+        raise HTTPException(status_code=400, detail="Dropbox not configured")
+    
+    from dropbox import DropboxOAuth2FlowNoRedirect
+    
+    auth_flow = DropboxOAuth2FlowNoRedirect(
+        DROPBOX_APP_KEY,
+        DROPBOX_APP_SECRET,
+        token_access_type='offline'
+    )
+    authorize_url = auth_flow.start()
+    
+    # Store auth flow in user session for later use
+    users_collection.update_one(
+        {"_id": ObjectId(current_user["id"])},
+        {"$set": {"dropbox_auth_flow_state": "pending"}}
+    )
+    
+    return {"authorize_url": authorize_url}
+
+@app.post("/api/dropbox/complete-auth")
+def complete_dropbox_auth(auth_code: str, current_user: dict = Depends(require_cp_or_admin)):
+    """Complete Dropbox OAuth with the authorization code"""
+    if not DROPBOX_APP_KEY or not DROPBOX_APP_SECRET:
+        raise HTTPException(status_code=400, detail="Dropbox not configured")
+    
+    from dropbox import DropboxOAuth2FlowNoRedirect
+    
+    try:
+        auth_flow = DropboxOAuth2FlowNoRedirect(
+            DROPBOX_APP_KEY,
+            DROPBOX_APP_SECRET,
+            token_access_type='offline'
+        )
+        auth_flow.start()  # Required to initialize the flow
+        
+        oauth_result = auth_flow.finish(auth_code)
+        
+        # Store tokens securely for user
+        users_collection.update_one(
+            {"_id": ObjectId(current_user["id"])},
+            {"$set": {
+                "dropbox_access_token": oauth_result.access_token,
+                "dropbox_refresh_token": oauth_result.refresh_token,
+                "dropbox_connected": True,
+                "dropbox_connected_at": datetime.utcnow()
+            }}
+        )
+        
+        return {"message": "Dropbox connected successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Dropbox auth failed: {str(e)}")
+
 @app.post("/api/projects/{project_id}/link-dropbox")
 def link_dropbox_to_project(
     project_id: str, 
@@ -993,6 +1049,11 @@ def link_dropbox_to_project(
     current_user: dict = Depends(require_cp_or_admin)
 ):
     """Link a Dropbox folder to project for document sync"""
+    # Check user has connected Dropbox
+    user = users_collection.find_one({"_id": ObjectId(current_user["id"])})
+    if not user or not user.get("dropbox_connected"):
+        raise HTTPException(status_code=400, detail="Please connect your Dropbox account first")
+    
     try:
         projects_collection.update_one(
             {"_id": ObjectId(project_id)},
@@ -1011,8 +1072,10 @@ async def get_dropbox_files(project_id: str, current_user: dict = Depends(get_cu
     """List files from linked Dropbox folder"""
     import dropbox
     
-    if not DROPBOX_ACCESS_TOKEN:
-        raise HTTPException(status_code=400, detail="Dropbox not configured")
+    # Get user's Dropbox token
+    user = users_collection.find_one({"_id": ObjectId(current_user["id"])})
+    if not user or not user.get("dropbox_access_token"):
+        raise HTTPException(status_code=400, detail="Dropbox not connected")
     
     project = projects_collection.find_one({"_id": ObjectId(project_id)})
     if not project:
@@ -1023,7 +1086,7 @@ async def get_dropbox_files(project_id: str, current_user: dict = Depends(get_cu
         return {"files": [], "message": "No Dropbox folder linked"}
     
     try:
-        dbx = dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
+        dbx = dropbox.Dropbox(user["dropbox_access_token"])
         result = dbx.files_list_folder(folder_path)
         
         files = []
@@ -1033,12 +1096,21 @@ async def get_dropbox_files(project_id: str, current_user: dict = Depends(get_cu
                 "path": entry.path_display,
                 "type": "folder" if isinstance(entry, dropbox.files.FolderMetadata) else "file",
                 "size": getattr(entry, 'size', None),
-                "modified": getattr(entry, 'server_modified', None)
+                "modified": str(getattr(entry, 'server_modified', None))
             })
         
         return {"files": files, "folder": folder_path}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Dropbox error: {str(e)}")
+
+@app.get("/api/dropbox/status")
+def get_dropbox_status(current_user: dict = Depends(get_current_user)):
+    """Check if user has connected Dropbox"""
+    user = users_collection.find_one({"_id": ObjectId(current_user["id"])})
+    return {
+        "connected": user.get("dropbox_connected", False) if user else False,
+        "connected_at": user.get("dropbox_connected_at") if user else None
+    }
 
 # ============== SETUP ==============
 
