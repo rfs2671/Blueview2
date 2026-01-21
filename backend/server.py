@@ -2294,17 +2294,32 @@ def get_setup_status():
     admin_exists = users_collection.find_one({"role": "admin"}) is not None
     project_count = projects_collection.count_documents({})
     worker_count = workers_collection.count_documents({})
+    subcontractor_count = users_collection.count_documents({"role": "subcontractor"})
+    material_request_count = material_requests_collection.count_documents({})
     
     return {
         "admin_exists": admin_exists,
         "project_count": project_count,
         "worker_count": worker_count,
+        "subcontractor_count": subcontractor_count,
+        "material_request_count": material_request_count,
         "database": "MongoDB Atlas",
+        "roles": ["admin", "subcontractor", "worker"],
         "integrations": {
             "google_oauth": bool(GOOGLE_CLIENT_ID),
             "openweather": bool(OPENWEATHER_API_KEY),
             "resend_email": bool(RESEND_API_KEY),
-            "dropbox": bool(DROPBOX_APP_KEY and DROPBOX_APP_SECRET)
+            "dropbox": bool(DROPBOX_APP_KEY and DROPBOX_APP_SECRET),
+            "twilio_sms": bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN),
+            "radar_geofence": bool(RADAR_API_KEY)
+        },
+        "features": {
+            "rbac": True,
+            "material_requests": True,
+            "geofencing": "ready (credentials pending)" if not RADAR_API_KEY else "active",
+            "sms_checkin": "ready (credentials pending)" if not TWILIO_ACCOUNT_SID else "active",
+            "dob_daily_log": True,
+            "dropbox_impersonation": True
         }
     }
 
