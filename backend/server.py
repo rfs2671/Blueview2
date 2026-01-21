@@ -132,10 +132,55 @@ async def require_admin(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
 
-async def require_cp_or_admin(current_user: dict = Depends(get_current_user)):
-    if current_user["role"] not in ["admin", "cp"]:
-        raise HTTPException(status_code=403, detail="CP or Admin access required")
+async def require_subcontractor_or_admin(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] not in ["admin", "subcontractor"]:
+        raise HTTPException(status_code=403, detail="Subcontractor or Admin access required")
     return current_user
+
+async def require_cp_or_admin(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] not in ["admin", "cp", "subcontractor"]:
+        raise HTTPException(status_code=403, detail="CP, Subcontractor or Admin access required")
+    return current_user
+
+async def require_can_edit(current_user: dict = Depends(get_current_user)):
+    """Only admin and subcontractor can edit, workers are view-only"""
+    if current_user["role"] not in ["admin", "subcontractor"]:
+        raise HTTPException(status_code=403, detail="Edit permission denied. Workers have view-only access.")
+    return current_user
+
+# Role permissions map
+ROLE_PERMISSIONS = {
+    "admin": {
+        "can_create": True,
+        "can_read": True,
+        "can_update": True,
+        "can_delete": True,
+        "can_manage_users": True,
+        "can_connect_dropbox": True,
+        "can_view_material_requests": True,
+        "can_approve_materials": True,
+    },
+    "subcontractor": {
+        "can_create": True,
+        "can_read": True,
+        "can_update": True,  # Only own workers
+        "can_delete": False,
+        "can_manage_users": False,
+        "can_connect_dropbox": False,
+        "can_add_workers": True,
+        "can_submit_material_requests": True,
+        "can_view_material_requests": True,  # Only own
+    },
+    "worker": {
+        "can_create": False,
+        "can_read": True,  # View-only
+        "can_update": False,
+        "can_delete": False,
+        "can_manage_users": False,
+        "can_connect_dropbox": False,
+        "can_view_documents": True,  # View admin's shared documents
+    }
+}
 
 # ============== MODELS ==============
 
