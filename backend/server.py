@@ -2410,6 +2410,740 @@ def owner_update_admin(admin_id: str, data: dict):
     
     return {"message": "Admin account updated"}
 
+# ============== REPORT SETTINGS (Admin) ==============
+
+@app.post("/api/projects/{project_id}/report-settings")
+def create_report_settings(project_id: str, settings: ReportSettingsCreate, current_user: dict = Depends(require_admin)):
+    """Admin configures report settings for a project"""
+    settings_dict = settings.model_dump()
+    settings_dict["project_id"] = project_id
+    settings_dict["admin_id"] = current_user["id"]
+    settings_dict["created_at"] = datetime.utcnow()
+    settings_dict["updated_at"] = datetime.utcnow()
+    
+    # Upsert - update if exists, create if not
+    report_settings_collection.update_one(
+        {"project_id": project_id},
+        {"$set": settings_dict},
+        upsert=True
+    )
+    
+    return {"message": "Report settings saved", "project_id": project_id}
+
+@app.get("/api/projects/{project_id}/report-settings")
+def get_report_settings(project_id: str, current_user: dict = Depends(require_admin)):
+    """Get report settings for a project"""
+    settings = report_settings_collection.find_one({"project_id": project_id})
+    if not settings:
+        return {
+            "project_id": project_id,
+            "email_recipients": [],
+            "report_trigger_time": "17:00",
+            "auto_send_enabled": True,
+            "include_jobsite_log": True,
+            "include_safety_orientation": True,
+            "include_safety_meeting": True
+        }
+    return serialize_doc(settings)
+
+# ============== TRADE MAPPINGS (Admin) ==============
+
+@app.post("/api/trade-mappings")
+def create_trade_mapping(mapping: TradeMappingCreate, current_user: dict = Depends(require_admin)):
+    """Admin creates trade to legal subcontractor name mapping"""
+    mapping_dict = mapping.model_dump()
+    mapping_dict["admin_id"] = current_user["id"]
+    mapping_dict["created_at"] = datetime.utcnow()
+    
+    # Upsert by trade name
+    trade_mappings_collection.update_one(
+        {"trade": mapping.trade, "admin_id": current_user["id"]},
+        {"$set": mapping_dict},
+        upsert=True
+    )
+    
+    return {"message": f"Mapping saved: {mapping.trade} → {mapping.legal_name}"}
+
+@app.get("/api/trade-mappings")
+def get_trade_mappings(current_user: dict = Depends(require_admin)):
+    """Get all trade mappings for admin"""
+    mappings = list(trade_mappings_collection.find({"admin_id": current_user["id"]}))
+    return serialize_docs(mappings)
+
+@app.delete("/api/trade-mappings/{mapping_id}")
+def delete_trade_mapping(mapping_id: str, current_user: dict = Depends(require_admin)):
+    """Delete a trade mapping"""
+    trade_mappings_collection.delete_one({"_id": ObjectId(mapping_id), "admin_id": current_user["id"]})
+    return {"message": "Mapping deleted"}
+
+# ============== NFC TAG MANAGEMENT ==============
+
+@app.post("/api/nfc-tags")
+def register_nfc_tag(tag: NFCTagCreate, current_user: dict = Depends(require_admin)):
+    """Admin registers an NFC tag for a job site"""
+    existing = nfc_tags_collection.find_one({"tag_id": tag.tag_id})
+    if existing:
+        raise HTTPException(status_code=400, detail="NFC tag already registered")
+    
+    tag_dict = tag.model_dump()
+    tag_dict["admin_id"] = current_user["id"]
+    tag_dict["created_at"] = datetime.utcnow()
+    tag_dict["is_active"] = True
+    
+    result = nfc_tags_collection.insert_one(tag_dict)
+    
+    return {
+        "id": str(result.inserted_id),
+        "tag_id": tag.tag_id,
+        "project_id": tag.project_id,
+        "message": "NFC tag registered successfully"
+    }
+
+@app.get("/api/nfc-tags")
+def get_nfc_tags(current_user: dict = Depends(require_admin)):
+    """Get all NFC tags"""
+    tags = list(nfc_tags_collection.find({"admin_id": current_user["id"]}))
+    return serialize_docs(tags)
+
+@app.get("/api/nfc-tags/{tag_id}/info")
+def get_nfc_tag_info(tag_id: str):
+    """Public endpoint - Get project info for NFC tag (used when worker scans)"""
+    tag = nfc_tags_collection.find_one({"tag_id": tag_id, "is_active": True})
+    if not tag:
+        raise HTTPException(status_code=404, detail="NFC tag not found or inactive")
+    
+    project = projects_collection.find_one({"_id": ObjectId(tag["project_id"])})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    return {
+        "tag_id": tag_id,
+        "project_id": tag["project_id"],
+        "project_name": project["name"],
+        "project_address": project.get("address", project.get("location", "")),
+        "location_description": tag.get("location_description", "")
+    }
+
+# ============== NFC CHECK-IN ==============
+
+@app.post("/api/nfc-checkin")
+def nfc_worker_checkin(checkin: NFCCheckInRequest):
+    """Worker checks in via NFC tag scan"""
+    # Verify NFC tag
+    tag = nfc_tags_collection.find_one({"tag_id": checkin.tag_id, "is_active": True})
+    if not tag:
+        raise HTTPException(status_code=404, detail="Invalid NFC tag")
+    
+    # Get worker
+    worker = workers_collection.find_one({"_id": ObjectId(checkin.worker_id)})
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    
+    # Create check-in record
+    checkin_record = {
+        "worker_id": checkin.worker_id,
+        "worker_name": worker.get("name"),
+        "worker_trade": worker.get("trade"),
+        "worker_company": worker.get("company"),
+        "worker_osha_number": worker.get("osha_number") or worker.get("osha_30_number"),
+        "project_id": tag["project_id"],
+        "nfc_tag_id": checkin.tag_id,
+        "check_in_time": datetime.utcnow(),
+        "check_out_time": None,
+        "signature": checkin.signature,
+        "check_in_method": "nfc",
+        "date": date.today().isoformat()
+    }
+    
+    result = checkins_collection.insert_one(checkin_record)
+    
+    return {
+        "checkin_id": str(result.inserted_id),
+        "worker_name": worker.get("name"),
+        "project_id": tag["project_id"],
+        "check_in_time": checkin_record["check_in_time"].isoformat(),
+        "message": "Check-in successful"
+    }
+
+@app.post("/api/nfc-checkout/{checkin_id}")
+def nfc_worker_checkout(checkin_id: str, signature: Optional[str] = None):
+    """Worker checks out"""
+    result = checkins_collection.update_one(
+        {"_id": ObjectId(checkin_id), "check_out_time": None},
+        {"$set": {
+            "check_out_time": datetime.utcnow(),
+            "checkout_signature": signature
+        }}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Check-in not found or already checked out")
+    
+    return {"message": "Check-out successful"}
+
+# ============== SAFETY MEETING ==============
+
+@app.post("/api/safety-meetings")
+def create_safety_meeting(meeting: SafetyMeetingCreate, current_user: dict = Depends(get_current_user)):
+    """Create pre-shift safety meeting record"""
+    meeting_dict = meeting.model_dump()
+    meeting_dict["created_by"] = current_user["id"]
+    meeting_dict["created_at"] = datetime.utcnow()
+    
+    result = safety_meetings_collection.insert_one(meeting_dict)
+    
+    return {"id": str(result.inserted_id), "message": "Safety meeting recorded"}
+
+@app.get("/api/safety-meetings/{project_id}/{meeting_date}")
+def get_safety_meeting(project_id: str, meeting_date: str, current_user: dict = Depends(get_current_user)):
+    """Get safety meeting for a specific date"""
+    meeting = safety_meetings_collection.find_one({
+        "project_id": project_id,
+        "meeting_date": meeting_date
+    })
+    if not meeting:
+        return None
+    return serialize_doc(meeting)
+
+# ============== DAILY REPORT PDF GENERATION ==============
+
+def get_legal_subcontractor_name(trade: str, admin_id: str) -> str:
+    """Get legal subcontractor name from trade mapping"""
+    mapping = trade_mappings_collection.find_one({"trade": trade, "admin_id": admin_id})
+    if mapping:
+        return mapping["legal_name"]
+    return trade  # Return original trade if no mapping
+
+def generate_jobsite_log_pdf(project_id: str, report_date: str, admin_id: str) -> bytes:
+    """Generate NYC DOB Daily Jobsite Log PDF (Form 3301-02)"""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    
+    # Get project info
+    project = projects_collection.find_one({"_id": ObjectId(project_id)})
+    project_name = project["name"] if project else "Unknown"
+    project_address = project.get("address", project.get("location", "")) if project else ""
+    
+    # Get check-ins for the day
+    checkins = list(checkins_collection.find({
+        "project_id": project_id,
+        "date": report_date
+    }))
+    
+    # Get weather
+    weather_info = "N/A"
+    if OPENWEATHER_API_KEY and project:
+        try:
+            lat = project.get("latitude", 40.7128)
+            lon = project.get("longitude", -74.0060)
+            weather_url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={OPENWEATHER_API_KEY}&units=imperial"
+            import requests
+            weather_resp = requests.get(weather_url, timeout=5)
+            if weather_resp.status_code == 200:
+                weather_data = weather_resp.json()
+                temp = weather_data["main"]["temp"]
+                desc = weather_data["weather"][0]["description"]
+                weather_info = f"{int(temp)}°F, {desc}"
+        except:
+            pass
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.3*inch, bottomMargin=0.3*inch, leftMargin=0.4*inch, rightMargin=0.4*inch)
+    
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=14, alignment=1, spaceAfter=5)
+    subtitle_style = ParagraphStyle('Subtitle', parent=styles['Normal'], fontSize=9, alignment=1, textColor=colors.gray)
+    section_style = ParagraphStyle('Section', parent=styles['Heading2'], fontSize=11, spaceBefore=10, spaceAfter=5, textColor=colors.HexColor('#003366'))
+    
+    elements = []
+    
+    # Header
+    elements.append(Paragraph("NYC Buildings", title_style))
+    elements.append(Paragraph("DAILY JOBSITE LOG", title_style))
+    elements.append(Paragraph("Superintendent Required Jobsite Log 3301-02", subtitle_style))
+    elements.append(Spacer(1, 0.15*inch))
+    
+    # Section 1: Project Information
+    elements.append(Paragraph("1. Project Information", section_style))
+    info_data = [
+        ["Address:", project_address, "Date:", report_date],
+        ["Weather:", weather_info, "", ""]
+    ]
+    info_table = Table(info_data, colWidths=[0.8*inch, 3*inch, 0.8*inch, 2.5*inch])
+    info_table.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(info_table)
+    
+    # Section 3: Activity Details (Worker List)
+    elements.append(Paragraph("3. Activity Details - Manpower Log", section_style))
+    
+    # Group by company
+    companies = {}
+    for c in checkins:
+        company = get_legal_subcontractor_name(c.get("worker_company", "Unknown"), admin_id)
+        if company not in companies:
+            companies[company] = []
+        companies[company].append(c)
+    
+    activity_data = [["Time In", "Worker Name", "Trade", "Legal Subcontractor", "OSHA #"]]
+    for company, workers in companies.items():
+        for w in workers:
+            time_in = w.get("check_in_time")
+            if isinstance(time_in, datetime):
+                time_in = time_in.strftime("%H:%M")
+            activity_data.append([
+                time_in or "N/A",
+                w.get("worker_name", "N/A"),
+                w.get("worker_trade", "N/A"),
+                company,
+                w.get("worker_osha_number", "N/A")
+            ])
+    
+    if len(activity_data) == 1:
+        activity_data.append(["", "No check-ins recorded", "", "", ""])
+    
+    activity_table = Table(activity_data, colWidths=[0.7*inch, 1.8*inch, 1.2*inch, 1.8*inch, 1.2*inch])
+    activity_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#003366')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')]),
+    ]))
+    elements.append(activity_table)
+    
+    # Summary
+    elements.append(Spacer(1, 0.1*inch))
+    elements.append(Paragraph(f"<b>Total Workers:</b> {len(checkins)} | <b>Total Companies:</b> {len(companies)}", styles['Normal']))
+    
+    # Footer
+    elements.append(Spacer(1, 0.3*inch))
+    elements.append(Paragraph(f"Generated by Blueview | {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", 
+                             ParagraphStyle('Footer', fontSize=7, textColor=colors.gray, alignment=1)))
+    
+    doc.build(elements)
+    return buffer.getvalue()
+
+def generate_safety_meeting_pdf(project_id: str, meeting_date: str) -> bytes:
+    """Generate Pre-Shift Safety Meeting PDF"""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    
+    meeting = safety_meetings_collection.find_one({
+        "project_id": project_id,
+        "meeting_date": meeting_date
+    })
+    
+    project = projects_collection.find_one({"_id": ObjectId(project_id)})
+    project_name = project["name"] if project else "Unknown"
+    project_address = project.get("address", project.get("location", "")) if project else ""
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.4*inch, bottomMargin=0.4*inch)
+    
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=14, alignment=1)
+    section_style = ParagraphStyle('Section', parent=styles['Heading2'], fontSize=11, spaceBefore=10, spaceAfter=5)
+    
+    elements = []
+    
+    # Header
+    elements.append(Paragraph("PRE-SHIFT SAFETY MEETING", title_style))
+    elements.append(Spacer(1, 0.2*inch))
+    
+    # Meeting Info
+    if meeting:
+        info_data = [
+            ["Company:", meeting.get("company", "N/A"), "Date:", meeting.get("meeting_date", meeting_date)],
+            ["Time:", meeting.get("meeting_time", "N/A"), "DOB Permit #:", meeting.get("dob_permit_number", "N/A")],
+            ["Job Location:", project_address, "Competent Person:", meeting.get("competent_person", "N/A")],
+        ]
+    else:
+        info_data = [
+            ["Company:", "N/A", "Date:", meeting_date],
+            ["Job Location:", project_address, "", ""],
+        ]
+    
+    info_table = Table(info_data, colWidths=[1.2*inch, 2.5*inch, 1.2*inch, 2.2*inch])
+    info_table.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(info_table)
+    
+    # Daily Activities
+    elements.append(Paragraph("Daily Work Activities To Be Performed During Shift:", section_style))
+    elements.append(Paragraph(meeting.get("daily_activities", "N/A") if meeting else "N/A", styles['Normal']))
+    
+    # Safety Concerns
+    elements.append(Paragraph("Safety Concerns or Risks:", section_style))
+    elements.append(Paragraph(meeting.get("safety_concerns", "N/A") if meeting else "N/A", styles['Normal']))
+    
+    # Attendance
+    elements.append(Paragraph("Attendance", section_style))
+    
+    attendance_data = [["#", "Name (Print)", "OSHA Num.", "Signature"]]
+    if meeting and meeting.get("attendees"):
+        for i, a in enumerate(meeting["attendees"], 1):
+            attendance_data.append([
+                str(i),
+                a.get("worker_name", "N/A"),
+                a.get("osha_number", "N/A"),
+                "[Signed]" if a.get("signature") else ""
+            ])
+    else:
+        # Use check-ins if no meeting record
+        checkins = list(checkins_collection.find({
+            "project_id": project_id,
+            "date": meeting_date
+        }))
+        for i, c in enumerate(checkins, 1):
+            attendance_data.append([
+                str(i),
+                c.get("worker_name", "N/A"),
+                c.get("worker_osha_number", "N/A"),
+                "[Signed]" if c.get("signature") else ""
+            ])
+    
+    if len(attendance_data) == 1:
+        attendance_data.append(["", "No attendees", "", ""])
+    
+    attendance_table = Table(attendance_data, colWidths=[0.5*inch, 2.5*inch, 2*inch, 2*inch])
+    attendance_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#003366')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
+        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+    ]))
+    elements.append(attendance_table)
+    
+    # Footer
+    elements.append(Spacer(1, 0.3*inch))
+    elements.append(Paragraph(f"Generated by Blueview | {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", 
+                             ParagraphStyle('Footer', fontSize=7, textColor=colors.gray, alignment=1)))
+    
+    doc.build(elements)
+    return buffer.getvalue()
+
+def generate_manpower_summary_pdf(project_id: str, report_date: str, admin_id: str) -> bytes:
+    """Generate combined manpower summary PDF"""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    
+    project = projects_collection.find_one({"_id": ObjectId(project_id)})
+    project_name = project["name"] if project else "Unknown"
+    project_address = project.get("address", project.get("location", "")) if project else ""
+    
+    checkins = list(checkins_collection.find({
+        "project_id": project_id,
+        "date": report_date
+    }))
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.4*inch, bottomMargin=0.4*inch)
+    
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=18, alignment=1, textColor=colors.HexColor('#FF6B00'))
+    subtitle_style = ParagraphStyle('Subtitle', parent=styles['Normal'], fontSize=12, alignment=1)
+    section_style = ParagraphStyle('Section', parent=styles['Heading2'], fontSize=12, spaceBefore=15, spaceAfter=8, textColor=colors.HexColor('#003366'))
+    
+    elements = []
+    
+    # Header
+    elements.append(Paragraph("BLUEVIEW", title_style))
+    elements.append(Paragraph("Daily Manpower Report", subtitle_style))
+    elements.append(Spacer(1, 0.2*inch))
+    
+    # Project Info Box
+    info_data = [
+        ["PROJECT:", project_name],
+        ["ADDRESS:", project_address],
+        ["DATE:", report_date],
+        ["TOTAL MANPOWER:", f"{len(checkins)} Workers"],
+    ]
+    info_table = Table(info_data, colWidths=[1.5*inch, 5.5*inch])
+    info_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#003366')),
+        ('TEXTCOLOR', (0, 0), (0, -1), colors.white),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('PADDING', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CCCCCC')),
+    ]))
+    elements.append(info_table)
+    
+    # Manpower by Company
+    elements.append(Paragraph("Manpower by Subcontractor", section_style))
+    
+    companies = {}
+    for c in checkins:
+        company = get_legal_subcontractor_name(c.get("worker_company", "Unknown"), admin_id)
+        if company not in companies:
+            companies[company] = {"count": 0, "workers": []}
+        companies[company]["count"] += 1
+        companies[company]["workers"].append(c)
+    
+    summary_data = [["Legal Subcontractor Name", "Trade", "# Workers"]]
+    for company, data in companies.items():
+        trades = set(w.get("worker_trade", "N/A") for w in data["workers"])
+        summary_data.append([company, ", ".join(trades), str(data["count"])])
+    
+    if len(summary_data) == 1:
+        summary_data.append(["No workers checked in", "", "0"])
+    
+    summary_table = Table(summary_data, colWidths=[3*inch, 2.5*inch, 1.5*inch])
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#FF6B00')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
+        ('ALIGN', (-1, 0), (-1, -1), 'CENTER'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FFF5EB')]),
+    ]))
+    elements.append(summary_table)
+    
+    # Detailed Worker List
+    elements.append(Paragraph("Worker Sign-In Ledger", section_style))
+    
+    worker_data = [["#", "Time In", "Worker Name", "Trade", "Company", "OSHA #"]]
+    for i, c in enumerate(checkins, 1):
+        time_in = c.get("check_in_time")
+        if isinstance(time_in, datetime):
+            time_in = time_in.strftime("%H:%M")
+        worker_data.append([
+            str(i),
+            time_in or "N/A",
+            c.get("worker_name", "N/A"),
+            c.get("worker_trade", "N/A"),
+            get_legal_subcontractor_name(c.get("worker_company", "N/A"), admin_id),
+            c.get("worker_osha_number", "N/A")
+        ])
+    
+    if len(worker_data) == 1:
+        worker_data.append(["", "", "No check-ins", "", "", ""])
+    
+    worker_table = Table(worker_data, colWidths=[0.4*inch, 0.7*inch, 1.5*inch, 1.2*inch, 1.5*inch, 1*inch])
+    worker_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#003366')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
+        ('ALIGN', (0, 0), (1, -1), 'CENTER'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')]),
+    ]))
+    elements.append(worker_table)
+    
+    # Footer
+    elements.append(Spacer(1, 0.4*inch))
+    elements.append(Paragraph(f"Report Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} | Blueview Construction Management", 
+                             ParagraphStyle('Footer', fontSize=8, textColor=colors.gray, alignment=1)))
+    
+    doc.build(elements)
+    return buffer.getvalue()
+
+# ============== REPORT GENERATION & DISTRIBUTION ==============
+
+@app.post("/api/projects/{project_id}/generate-daily-report")
+async def generate_daily_report(
+    project_id: str, 
+    report_date: Optional[str] = None,
+    background_tasks: BackgroundTasks = None,
+    current_user: dict = Depends(require_admin)
+):
+    """Manually trigger daily report generation and email distribution"""
+    if not report_date:
+        report_date = date.today().isoformat()
+    
+    # Get report settings
+    settings = report_settings_collection.find_one({"project_id": project_id})
+    
+    # Get project
+    project = projects_collection.find_one({"_id": ObjectId(project_id)})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Get check-ins count
+    checkins_count = checkins_collection.count_documents({
+        "project_id": project_id,
+        "date": report_date
+    })
+    
+    # Generate PDFs
+    reports = {}
+    
+    # Generate Jobsite Log
+    try:
+        jobsite_pdf = generate_jobsite_log_pdf(project_id, report_date, current_user["id"])
+        reports["jobsite_log"] = base64.b64encode(jobsite_pdf).decode()
+    except Exception as e:
+        reports["jobsite_log_error"] = str(e)
+    
+    # Generate Safety Meeting PDF
+    try:
+        safety_pdf = generate_safety_meeting_pdf(project_id, report_date)
+        reports["safety_meeting"] = base64.b64encode(safety_pdf).decode()
+    except Exception as e:
+        reports["safety_meeting_error"] = str(e)
+    
+    # Generate Manpower Summary
+    try:
+        manpower_pdf = generate_manpower_summary_pdf(project_id, report_date, current_user["id"])
+        reports["manpower_summary"] = base64.b64encode(manpower_pdf).decode()
+    except Exception as e:
+        reports["manpower_summary_error"] = str(e)
+    
+    # Store report record
+    report_record = {
+        "project_id": project_id,
+        "project_name": project["name"],
+        "report_date": report_date,
+        "generated_at": datetime.utcnow(),
+        "generated_by": current_user["id"],
+        "workers_count": checkins_count,
+        "reports": reports,
+        "email_sent": False,
+        "email_recipients": []
+    }
+    
+    result = generated_reports_collection.insert_one(report_record)
+    report_id = str(result.inserted_id)
+    
+    # Send email if recipients configured
+    email_sent = False
+    email_error = None
+    if settings and settings.get("email_recipients") and RESEND_API_KEY:
+        try:
+            recipients = settings["email_recipients"]
+            
+            # Create email with attachment
+            email_body = f"""
+            <h2>Daily Manpower Report - {project["name"]}</h2>
+            <p><strong>Date:</strong> {report_date}</p>
+            <p><strong>Total Workers:</strong> {checkins_count}</p>
+            <p>Please find the attached daily reports.</p>
+            <hr>
+            <p><em>Generated by Blueview Construction Management</em></p>
+            """
+            
+            # Prepare attachments
+            attachments = []
+            if "manpower_summary" in reports:
+                attachments.append({
+                    "filename": f"ManpowerReport_{report_date}.pdf",
+                    "content": reports["manpower_summary"]
+                })
+            if "jobsite_log" in reports:
+                attachments.append({
+                    "filename": f"JobsiteLog_{report_date}.pdf",
+                    "content": reports["jobsite_log"]
+                })
+            if "safety_meeting" in reports:
+                attachments.append({
+                    "filename": f"SafetyMeeting_{report_date}.pdf",
+                    "content": reports["safety_meeting"]
+                })
+            
+            resend.api_key = RESEND_API_KEY
+            email_result = resend.Emails.send({
+                "from": "Blueview Reports <reports@resend.dev>",
+                "to": recipients,
+                "subject": f"Daily Manpower Report - {project['name']} - {report_date}",
+                "html": email_body,
+                "attachments": attachments
+            })
+            
+            email_sent = True
+            generated_reports_collection.update_one(
+                {"_id": ObjectId(report_id)},
+                {"$set": {
+                    "email_sent": True,
+                    "email_recipients": recipients,
+                    "email_sent_at": datetime.utcnow()
+                }}
+            )
+            
+        except Exception as e:
+            email_error = str(e)
+    
+    return {
+        "report_id": report_id,
+        "project_name": project["name"],
+        "report_date": report_date,
+        "workers_count": checkins_count,
+        "reports_generated": list(k for k in reports.keys() if not k.endswith("_error")),
+        "email_sent": email_sent,
+        "email_recipients": settings.get("email_recipients", []) if settings else [],
+        "email_error": email_error
+    }
+
+@app.get("/api/projects/{project_id}/reports")
+def get_project_reports(project_id: str, current_user: dict = Depends(require_admin)):
+    """Get all generated reports for a project (for audit/download)"""
+    reports = list(generated_reports_collection.find({"project_id": project_id}).sort("report_date", -1).limit(30))
+    
+    # Remove large PDF data for listing
+    result = []
+    for r in reports:
+        result.append({
+            "id": str(r["_id"]),
+            "project_id": r["project_id"],
+            "report_date": r["report_date"],
+            "generated_at": r["generated_at"],
+            "workers_count": r.get("workers_count", 0),
+            "email_sent": r.get("email_sent", False),
+            "email_recipients": r.get("email_recipients", [])
+        })
+    
+    return result
+
+@app.get("/api/reports/{report_id}/download")
+def download_report(report_id: str, report_type: str = "manpower_summary", current_user: dict = Depends(get_current_user)):
+    """Download a specific report PDF"""
+    report = generated_reports_collection.find_one({"_id": ObjectId(report_id)})
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    
+    pdf_data = report.get("reports", {}).get(report_type)
+    if not pdf_data:
+        raise HTTPException(status_code=404, detail=f"Report type '{report_type}' not found")
+    
+    return {
+        "pdf_base64": pdf_data,
+        "filename": f"{report_type}_{report['report_date']}.pdf",
+        "report_date": report["report_date"]
+    }
+
+@app.get("/api/checkins/{project_id}/{checkin_date}")
+def get_project_checkins(project_id: str, checkin_date: str, current_user: dict = Depends(get_current_user)):
+    """Get all check-ins for a project on a specific date"""
+    checkins = list(checkins_collection.find({
+        "project_id": project_id,
+        "date": checkin_date
+    }))
+    return serialize_docs(checkins)
+
 @app.post("/api/setup/init-admin")
 def init_admin():
     """Initialize the first admin account"""
