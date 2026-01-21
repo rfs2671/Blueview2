@@ -1601,6 +1601,660 @@ def create_sample_data(current_user: dict = Depends(require_admin)):
         "daily_log_created": not bool(existing_log)
     }
 
+# ============== SUBCONTRACTOR MANAGEMENT (Admin only) ==============
+
+@app.post("/api/admin/create-subcontractor")
+def create_subcontractor(sub: SubcontractorCreate, current_user: dict = Depends(require_admin)):
+    """Admin creates a subcontractor account"""
+    existing = users_collection.find_one({"email": sub.email.lower()})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    user_dict = {
+        "email": sub.email.lower(),
+        "password": hash_password(sub.password),
+        "name": sub.contact_name,
+        "role": "subcontractor",
+        "company_name": sub.company_name,
+        "contact_name": sub.contact_name,
+        "phone": sub.phone,
+        "trade": sub.trade,
+        "assigned_projects": sub.assigned_projects,
+        "created_at": datetime.utcnow(),
+        "created_by": current_user["id"],
+        "workers": [],  # Worker phone numbers managed by this subcontractor
+    }
+    result = users_collection.insert_one(user_dict)
+    
+    return {
+        "id": str(result.inserted_id),
+        "email": sub.email.lower(),
+        "company_name": sub.company_name,
+        "contact_name": sub.contact_name,
+        "role": "subcontractor",
+        "assigned_projects": sub.assigned_projects
+    }
+
+@app.get("/api/admin/subcontractors")
+def get_all_subcontractors(current_user: dict = Depends(require_admin)):
+    """Admin gets all subcontractors"""
+    subs = list(users_collection.find({"role": "subcontractor"}))
+    return [{
+        "id": str(s["_id"]),
+        "email": s["email"],
+        "company_name": s.get("company_name"),
+        "contact_name": s.get("contact_name"),
+        "phone": s.get("phone"),
+        "trade": s.get("trade"),
+        "assigned_projects": s.get("assigned_projects", []),
+        "workers_count": len(s.get("workers", [])),
+        "created_at": s.get("created_at")
+    } for s in subs]
+
+@app.put("/api/admin/subcontractors/{sub_id}")
+def update_subcontractor(sub_id: str, data: SubcontractorUpdate, current_user: dict = Depends(require_admin)):
+    """Admin updates a subcontractor"""
+    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    if update_data:
+        update_data["updated_at"] = datetime.utcnow()
+        users_collection.update_one(
+            {"_id": ObjectId(sub_id), "role": "subcontractor"},
+            {"$set": update_data}
+        )
+    return {"message": "Subcontractor updated"}
+
+@app.delete("/api/admin/subcontractors/{sub_id}")
+def delete_subcontractor(sub_id: str, current_user: dict = Depends(require_admin)):
+    """Admin deletes a subcontractor"""
+    result = users_collection.delete_one({"_id": ObjectId(sub_id), "role": "subcontractor"})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Subcontractor not found")
+    return {"message": "Subcontractor deleted"}
+
+# ============== SUBCONTRACTOR: WORKER PHONE MANAGEMENT ==============
+
+@app.post("/api/subcontractor/workers")
+def add_worker_phone(worker: WorkerPhoneCreate, current_user: dict = Depends(require_subcontractor_or_admin)):
+    """Subcontractor adds a worker's phone for SMS check-in"""
+    worker_dict = worker.model_dump()
+    worker_dict["subcontractor_id"] = current_user["id"]
+    worker_dict["created_at"] = datetime.utcnow()
+    worker_dict["sms_check_in_token"] = secrets.token_urlsafe(32)  # Unique token for fast login
+    worker_dict["is_whitelisted"] = True
+    
+    result = workers_collection.insert_one(worker_dict)
+    
+    # Add to subcontractor's worker list
+    users_collection.update_one(
+        {"_id": ObjectId(current_user["id"])},
+        {"$push": {"workers": str(result.inserted_id)}}
+    )
+    
+    return {
+        "id": str(result.inserted_id),
+        "name": worker.name,
+        "phone": worker.phone,
+        "sms_token": worker_dict["sms_check_in_token"]
+    }
+
+@app.get("/api/subcontractor/workers")
+def get_subcontractor_workers(current_user: dict = Depends(require_subcontractor_or_admin)):
+    """Subcontractor gets their workers"""
+    if current_user["role"] == "admin":
+        workers = list(workers_collection.find())
+    else:
+        workers = list(workers_collection.find({"subcontractor_id": current_user["id"]}))
+    
+    return [{
+        "id": str(w["_id"]),
+        "name": w.get("name"),
+        "phone": w.get("phone"),
+        "trade": w.get("trade"),
+        "osha_30_number": w.get("osha_30_number"),
+        "osha_30_expiry": w.get("osha_30_expiry"),
+        "sst_number": w.get("sst_number"),
+        "sst_expiry": w.get("sst_expiry"),
+        "is_whitelisted": w.get("is_whitelisted", True)
+    } for w in workers]
+
+@app.put("/api/subcontractor/workers/{worker_id}")
+def update_worker_phone(worker_id: str, data: dict, current_user: dict = Depends(require_subcontractor_or_admin)):
+    """Subcontractor updates a worker"""
+    query = {"_id": ObjectId(worker_id)}
+    if current_user["role"] != "admin":
+        query["subcontractor_id"] = current_user["id"]
+    
+    data["updated_at"] = datetime.utcnow()
+    result = workers_collection.update_one(query, {"$set": data})
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Worker not found or access denied")
+    return {"message": "Worker updated"}
+
+# ============== MATERIAL REQUESTS ==============
+
+@app.post("/api/material-requests")
+def create_material_request(request: MaterialRequestCreate, current_user: dict = Depends(require_subcontractor_or_admin)):
+    """Subcontractor submits a material request for a project"""
+    # Verify project access
+    if current_user["role"] == "subcontractor":
+        if request.project_id not in current_user.get("assigned_projects", []):
+            raise HTTPException(status_code=403, detail="Not assigned to this project")
+    
+    request_dict = request.model_dump()
+    request_dict["subcontractor_id"] = current_user["id"]
+    request_dict["subcontractor_company"] = current_user.get("company_name", current_user.get("name"))
+    request_dict["status"] = "pending"
+    request_dict["created_at"] = datetime.utcnow()
+    request_dict["updated_at"] = datetime.utcnow()
+    
+    result = material_requests_collection.insert_one(request_dict)
+    request_dict["id"] = str(result.inserted_id)
+    if "_id" in request_dict:
+        del request_dict["_id"]
+    
+    return request_dict
+
+@app.get("/api/material-requests")
+def get_material_requests(
+    project_id: Optional[str] = None,
+    status: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get material requests (Admin sees all, Subcontractor sees own)"""
+    query = {}
+    
+    if current_user["role"] == "subcontractor":
+        query["subcontractor_id"] = current_user["id"]
+    
+    if project_id:
+        query["project_id"] = project_id
+    if status:
+        query["status"] = status
+    
+    requests = list(material_requests_collection.find(query).sort("created_at", -1))
+    return serialize_docs(requests)
+
+@app.get("/api/material-requests/{request_id}")
+def get_material_request(request_id: str, current_user: dict = Depends(get_current_user)):
+    """Get a specific material request"""
+    request = material_requests_collection.find_one({"_id": ObjectId(request_id)})
+    if not request:
+        raise HTTPException(status_code=404, detail="Request not found")
+    
+    # Subcontractors can only see their own
+    if current_user["role"] == "subcontractor" and request.get("subcontractor_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    return serialize_doc(request)
+
+@app.put("/api/material-requests/{request_id}")
+def update_material_request(request_id: str, data: MaterialRequestUpdate, current_user: dict = Depends(require_admin)):
+    """Admin updates material request status"""
+    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    update_data["updated_at"] = datetime.utcnow()
+    update_data["updated_by"] = current_user["id"]
+    
+    result = material_requests_collection.update_one(
+        {"_id": ObjectId(request_id)},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Request not found")
+    
+    return get_material_request(request_id, current_user)
+
+# ============== GEOFENCING (Radar.io - MOCKED) ==============
+
+@app.post("/api/projects/{project_id}/geofence")
+def set_project_geofence(project_id: str, config: GeofenceConfig, current_user: dict = Depends(require_admin)):
+    """Admin sets geofence for a project"""
+    projects_collection.update_one(
+        {"_id": ObjectId(project_id)},
+        {"$set": {
+            "geofence": config.model_dump(),
+            "geofence_updated_at": datetime.utcnow()
+        }}
+    )
+    
+    # TODO: When Radar.io credentials provided, create geofence in Radar
+    if RADAR_API_KEY:
+        # Real Radar.io integration would go here
+        pass
+    
+    return {"message": "Geofence configured", "config": config.model_dump()}
+
+@app.get("/api/projects/{project_id}/geofence")
+def get_project_geofence(project_id: str, current_user: dict = Depends(get_current_user)):
+    """Get geofence config for a project"""
+    project = projects_collection.find_one({"_id": ObjectId(project_id)})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    return project.get("geofence", {"active": False, "message": "Geofence not configured"})
+
+@app.post("/api/geofence/entry-event")
+async def handle_geofence_entry(
+    phone: str,
+    project_id: str,
+    latitude: float,
+    longitude: float,
+    background_tasks: BackgroundTasks
+):
+    """
+    Webhook for geofence entry event (from Radar.io or client-side detection)
+    Triggers SMS with fast login link
+    """
+    # Find worker by phone
+    worker = workers_collection.find_one({"phone": phone, "is_whitelisted": True})
+    if not worker:
+        return {"status": "ignored", "reason": "Phone not whitelisted"}
+    
+    # Log the geofence event
+    event = {
+        "worker_id": str(worker["_id"]),
+        "project_id": project_id,
+        "phone": phone,
+        "latitude": latitude,
+        "longitude": longitude,
+        "event_type": "entry",
+        "timestamp": datetime.utcnow(),
+        "sms_sent": False
+    }
+    event_result = geofence_events_collection.insert_one(event)
+    
+    # Generate fast login token
+    fast_login_token = secrets.token_urlsafe(32)
+    workers_collection.update_one(
+        {"_id": worker["_id"]},
+        {"$set": {
+            "fast_login_token": fast_login_token,
+            "fast_login_expires": datetime.utcnow() + timedelta(hours=12)
+        }}
+    )
+    
+    # Schedule SMS
+    background_tasks.add_task(
+        send_checkin_sms, 
+        phone, 
+        fast_login_token, 
+        project_id,
+        str(event_result.inserted_id)
+    )
+    
+    return {
+        "status": "processing",
+        "event_id": str(event_result.inserted_id),
+        "message": "SMS check-in link will be sent"
+    }
+
+# ============== SMS CHECK-IN (Twilio - MOCKED) ==============
+
+async def send_checkin_sms(phone: str, token: str, project_id: str, event_id: str):
+    """Send SMS with fast login link via Twilio"""
+    # Get project name
+    project = projects_collection.find_one({"_id": ObjectId(project_id)})
+    project_name = project["name"] if project else "Job Site"
+    
+    # Build fast login URL
+    base_url = os.getenv("APP_URL", "https://blueview.app")
+    fast_login_url = f"{base_url}/checkin?token={token}&project={project_id}"
+    
+    message = f"Blueview: You've arrived at {project_name}. Tap to check in: {fast_login_url}"
+    
+    sms_log = {
+        "phone": phone,
+        "message": message,
+        "project_id": project_id,
+        "token": token,
+        "event_id": event_id,
+        "sent_at": datetime.utcnow(),
+        "status": "pending"
+    }
+    
+    if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER:
+        # Real Twilio integration
+        try:
+            from twilio.rest import Client
+            client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+            
+            twilio_message = client.messages.create(
+                body=message,
+                from_=TWILIO_PHONE_NUMBER,
+                to=phone
+            )
+            sms_log["status"] = "sent"
+            sms_log["twilio_sid"] = twilio_message.sid
+        except Exception as e:
+            sms_log["status"] = "failed"
+            sms_log["error"] = str(e)
+    else:
+        # MOCKED - credentials not provided
+        sms_log["status"] = "mocked"
+        sms_log["note"] = "Twilio credentials not configured. SMS would be sent in production."
+        print(f"[MOCKED SMS] To: {phone}, Message: {message}")
+    
+    sms_logs_collection.insert_one(sms_log)
+    
+    # Update geofence event
+    geofence_events_collection.update_one(
+        {"_id": ObjectId(event_id)},
+        {"$set": {"sms_sent": True, "sms_status": sms_log["status"]}}
+    )
+
+@app.post("/api/checkin/fast-login")
+def fast_login_checkin(data: SMSCheckInRequest):
+    """
+    Fast login via SMS link - auto-authenticates worker and logs check-in
+    """
+    # Find worker by token
+    worker = workers_collection.find_one({
+        "fast_login_token": data.token,
+        "fast_login_expires": {"$gt": datetime.utcnow()}
+    })
+    
+    if not worker:
+        raise HTTPException(status_code=401, detail="Invalid or expired check-in link")
+    
+    # Create JWT for worker
+    token = create_access_token(str(worker["_id"]), "worker", worker.get("phone", ""))
+    
+    # Log check-in with GPS
+    checkin = {
+        "worker_id": str(worker["_id"]),
+        "worker_name": worker.get("name"),
+        "worker_phone": worker.get("phone"),
+        "latitude": data.latitude,
+        "longitude": data.longitude,
+        "check_in_time": datetime.utcnow(),
+        "check_in_method": "sms_fast_login",
+        "gps_confirmed": True
+    }
+    checkins_collection.insert_one(checkin)
+    
+    # Invalidate the fast login token
+    workers_collection.update_one(
+        {"_id": worker["_id"]},
+        {"$unset": {"fast_login_token": "", "fast_login_expires": ""}}
+    )
+    
+    return {
+        "token": token,
+        "worker": {
+            "id": str(worker["_id"]),
+            "name": worker.get("name"),
+            "phone": worker.get("phone"),
+            "trade": worker.get("trade")
+        },
+        "checkin_time": checkin["check_in_time"].isoformat()
+    }
+
+# ============== NYC DOB DAILY LOG ==============
+
+@app.post("/api/dob-daily-log/{project_id}")
+def create_or_append_dob_log(project_id: str, entry: DOBDailyLogEntry, current_user: dict = Depends(get_current_user)):
+    """
+    Create or append to NYC DOB Daily Log for a project
+    Auto-appends worker credentials when they check in
+    """
+    today = date.today().isoformat()
+    
+    # Get or create today's DOB log
+    dob_log = dob_daily_logs_collection.find_one({
+        "project_id": project_id,
+        "log_date": today
+    })
+    
+    # Get worker details
+    worker = workers_collection.find_one({"_id": ObjectId(entry.worker_id)})
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    
+    worker_entry = {
+        "worker_id": entry.worker_id,
+        "name": worker.get("name"),
+        "trade": worker.get("trade"),
+        "company": worker.get("company"),
+        "osha_30_number": worker.get("osha_30_number"),
+        "osha_30_expiry": worker.get("osha_30_expiry"),
+        "sst_number": worker.get("sst_number"),
+        "sst_expiry": worker.get("sst_expiry"),
+        "check_in_time": entry.check_in_time,
+        "check_out_time": entry.check_out_time,
+        "gps_lat": entry.gps_lat,
+        "gps_lng": entry.gps_lng,
+        "signature_confirmed": entry.signature_confirmed
+    }
+    
+    if dob_log:
+        # Append to existing log
+        dob_daily_logs_collection.update_one(
+            {"_id": dob_log["_id"]},
+            {
+                "$push": {"workers": worker_entry},
+                "$set": {"updated_at": datetime.utcnow()}
+            }
+        )
+        return {"message": "Worker appended to DOB log", "log_id": str(dob_log["_id"])}
+    else:
+        # Create new DOB log
+        project = projects_collection.find_one({"_id": ObjectId(project_id)})
+        
+        new_log = {
+            "project_id": project_id,
+            "project_name": project["name"] if project else "Unknown",
+            "project_address": project.get("address", ""),
+            "log_date": today,
+            "workers": [worker_entry],
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+            "status": "active",
+            "dob_compliant": True
+        }
+        result = dob_daily_logs_collection.insert_one(new_log)
+        return {"message": "DOB log created", "log_id": str(result.inserted_id)}
+
+@app.get("/api/dob-daily-log/{project_id}/{log_date}")
+def get_dob_daily_log(project_id: str, log_date: str, current_user: dict = Depends(get_current_user)):
+    """Get DOB Daily Log for a specific date"""
+    log = dob_daily_logs_collection.find_one({
+        "project_id": project_id,
+        "log_date": log_date
+    })
+    
+    if not log:
+        raise HTTPException(status_code=404, detail="DOB log not found for this date")
+    
+    return serialize_doc(log)
+
+@app.get("/api/dob-daily-log/{project_id}/export")
+def export_dob_log_pdf(project_id: str, log_date: str = None, current_user: dict = Depends(get_current_user)):
+    """
+    Export NYC DOB compliant Daily Log as PDF
+    Format meets NYC DOB site safety requirements
+    """
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    
+    if not log_date:
+        log_date = date.today().isoformat()
+    
+    log = dob_daily_logs_collection.find_one({
+        "project_id": project_id,
+        "log_date": log_date
+    })
+    
+    if not log:
+        raise HTTPException(status_code=404, detail="No DOB log for this date")
+    
+    project = projects_collection.find_one({"_id": ObjectId(project_id)})
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
+    styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=16, alignment=1)
+    
+    elements = []
+    
+    # Header
+    elements.append(Paragraph("NYC DOB DAILY FIELD LOG", title_style))
+    elements.append(Spacer(1, 0.2*inch))
+    
+    # Project Info
+    project_info = [
+        ["Project Name:", project["name"] if project else log.get("project_name", "")],
+        ["Project Address:", project.get("address", "") if project else log.get("project_address", "")],
+        ["Date:", log_date],
+        ["Total Workers:", str(len(log.get("workers", [])))],
+    ]
+    
+    info_table = Table(project_info, colWidths=[1.5*inch, 5*inch])
+    info_table.setStyle(TableStyle([
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(info_table)
+    elements.append(Spacer(1, 0.3*inch))
+    
+    # Worker Sign-In Log
+    elements.append(Paragraph("WORKER SIGN-IN LOG", styles['Heading2']))
+    
+    worker_header = ["#", "Name", "Trade", "Company", "OSHA 30", "SST", "Time In", "GPS"]
+    worker_data = [worker_header]
+    
+    for i, w in enumerate(log.get("workers", []), 1):
+        worker_data.append([
+            str(i),
+            w.get("name", "N/A"),
+            w.get("trade", "N/A"),
+            w.get("company", "N/A"),
+            w.get("osha_30_number", "N/A"),
+            w.get("sst_number", "N/A"),
+            w.get("check_in_time", "N/A")[:8] if w.get("check_in_time") else "N/A",
+            "✓" if w.get("gps_lat") else "✗"
+        ])
+    
+    worker_table = Table(worker_data, colWidths=[0.4*inch, 1.2*inch, 0.8*inch, 1*inch, 0.8*inch, 0.8*inch, 0.7*inch, 0.4*inch])
+    worker_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#003366')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.gray),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')]),
+    ]))
+    elements.append(worker_table)
+    
+    # Footer
+    elements.append(Spacer(1, 0.5*inch))
+    elements.append(Paragraph(
+        f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} | NYC DOB Compliant Format",
+        ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, textColor=colors.gray, alignment=1)
+    ))
+    
+    doc.build(elements)
+    
+    pdf_base64 = base64.b64encode(buffer.getvalue()).decode()
+    return {
+        "pdf_base64": pdf_base64,
+        "filename": f"DOB_DailyLog_{project_id}_{log_date}.pdf"
+    }
+
+# ============== DROPBOX ADMIN IMPERSONATION ==============
+
+@app.get("/api/documents/shared")
+def get_shared_documents(project_id: str, current_user: dict = Depends(get_current_user)):
+    """
+    Workers and Subcontractors view Admin's shared Dropbox documents
+    Uses Admin's stored Dropbox token (impersonation)
+    """
+    # Get admin's Dropbox token
+    admin = users_collection.find_one({"role": "admin", "dropbox_access_token": {"$exists": True}})
+    if not admin or not admin.get("dropbox_access_token"):
+        return {"files": [], "message": "Admin has not connected Dropbox"}
+    
+    # Get project's linked folder
+    project = projects_collection.find_one({"_id": ObjectId(project_id)})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    folder_path = project.get("dropbox_folder")
+    if not folder_path:
+        return {"files": [], "message": "No Dropbox folder linked to this project"}
+    
+    # List files using Admin's token
+    try:
+        import dropbox
+        dbx = dropbox.Dropbox(admin["dropbox_access_token"])
+        result = dbx.files_list_folder(folder_path)
+        
+        files = []
+        for entry in result.entries:
+            file_info = {
+                "name": entry.name,
+                "path": entry.path_display,
+                "type": "folder" if isinstance(entry, dropbox.files.FolderMetadata) else "file",
+            }
+            
+            # Add file-specific info
+            if hasattr(entry, 'size'):
+                file_info["size"] = entry.size
+            if hasattr(entry, 'server_modified'):
+                file_info["modified"] = str(entry.server_modified)
+            
+            # Check if viewable (PDF/Image)
+            if file_info["type"] == "file":
+                ext = entry.name.lower().split('.')[-1] if '.' in entry.name else ''
+                file_info["viewable"] = ext in ['pdf', 'png', 'jpg', 'jpeg', 'gif']
+            
+            files.append(file_info)
+        
+        return {
+            "files": files,
+            "folder": folder_path,
+            "can_edit": current_user["role"] == "admin",  # Workers/subs are view-only
+            "can_delete": current_user["role"] == "admin"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Dropbox error: {str(e)}")
+
+@app.get("/api/documents/view/{project_id}")
+async def view_document(project_id: str, file_path: str, current_user: dict = Depends(get_current_user)):
+    """
+    View a document from Admin's Dropbox (read-only for workers/subs)
+    Returns temporary download link
+    """
+    # Get admin's token
+    admin = users_collection.find_one({"role": "admin", "dropbox_access_token": {"$exists": True}})
+    if not admin:
+        raise HTTPException(status_code=400, detail="Dropbox not configured")
+    
+    try:
+        import dropbox
+        dbx = dropbox.Dropbox(admin["dropbox_access_token"])
+        
+        # Get temporary link
+        link = dbx.files_get_temporary_link(file_path)
+        
+        return {
+            "download_url": link.link,
+            "filename": file_path.split('/')[-1],
+            "expires_in": "4 hours",
+            "can_edit": False  # Always read-only for this endpoint
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not get file: {str(e)}")
+
 # ============== SETUP ==============
 
 @app.post("/api/setup/init-admin")
