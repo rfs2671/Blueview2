@@ -67,12 +67,19 @@ export default function SubcontractorsScreen() {
 
   useEffect(() => {
     if (user?.role !== 'admin') {
-      Alert.alert('Access Denied', 'Only admins can manage subcontractors');
-      router.back();
+      // Redirect will happen via Alert, don't navigate directly in useEffect
       return;
     }
     fetchSubcontractors();
-  }, []);
+  }, [user]);
+
+  useEffect(() => {
+    if (user && user.role !== 'admin') {
+      Alert.alert('Access Denied', 'Only admins can manage subcontractors', [
+        { text: 'OK', onPress: () => router.back() }
+      ]);
+    }
+  }, [user]);
 
   const fetchSubcontractors = async () => {
     try {
