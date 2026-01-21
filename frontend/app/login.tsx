@@ -286,55 +286,31 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.text,
   },
-  divider: {
+  infoSection: {
+    marginTop: 20,
+  },
+  infoCard: {
     flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 20,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: COLORS.border,
-  },
-  dividerText: {
-    paddingHorizontal: 16,
-    fontSize: 13,
-    color: COLORS.textSecondary,
-    fontWeight: '600',
-  },
-  workerSection: {
+    alignItems: 'flex-start',
     backgroundColor: COLORS.surface,
-    borderRadius: 16,
-    padding: 20,
-    alignItems: 'center',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    gap: 12,
   },
-  workerTitle: {
-    fontSize: 18,
+  infoContent: {
+    flex: 1,
+  },
+  infoTitle: {
+    fontSize: 14,
     fontWeight: '700',
     color: COLORS.text,
     marginBottom: 4,
   },
-  workerSubtitle: {
-    fontSize: 14,
+  infoText: {
+    fontSize: 13,
     color: COLORS.textSecondary,
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  googleButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.text,
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 24,
-    width: '100%',
-    gap: 10,
-  },
-  googleButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: COLORS.background,
+    lineHeight: 18,
   },
   demoInfo: {
     flexDirection: 'row',
