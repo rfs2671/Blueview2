@@ -185,7 +185,7 @@ export default function LoginScreen() {
           <View style={styles.demoInfo}>
             <Ionicons name="information-circle" size={18} color={COLORS.secondary} />
             <Text style={styles.demoInfoText}>
-              Demo: admin@blueview.com / admin123
+              Admin: admin@blueview.com / BlueviewAdmin123
             </Text>
           </View>
         </ScrollView>
