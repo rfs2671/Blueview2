@@ -305,6 +305,17 @@ export default function HomeScreen() {
           />
         )}
 
+        {/* Admin & CP: Reports */}
+        {(user?.role === 'admin' || user?.role === 'cp') && (
+          <QuickActionCard
+            icon="analytics"
+            title="Reports"
+            subtitle="View & download daily reports"
+            color="#9C27B0"
+            onPress={() => handleNavigation('/reports')}
+          />
+        )}
+
         {/* Worker: My Passport */}
         {user?.role === 'worker' && user?.has_passport && (
           <QuickActionCard
