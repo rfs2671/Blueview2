@@ -2257,6 +2257,92 @@ async def view_document(project_id: str, file_path: str, current_user: dict = De
 
 # ============== SETUP ==============
 
+# Owner master key (in production use secure env variable)
+OWNER_MASTER_KEY = "BlueviewOwner2025!"
+
+@app.get("/api/owner/admins")
+def get_all_admins():
+    """Owner gets all admin accounts (companies)"""
+    admins = list(users_collection.find({"role": "admin"}))
+    return [{
+        "id": str(a["_id"]),
+        "email": a["email"],
+        "company_name": a.get("company_name", a.get("name", "Unknown")),
+        "contact_name": a.get("contact_name", a.get("name", "")),
+        "created_at": a.get("created_at", "").isoformat() if a.get("created_at") else "",
+        "is_active": a.get("is_active", True)
+    } for a in admins]
+
+@app.post("/api/owner/create-admin")
+def owner_create_admin(data: dict):
+    """Owner creates a new admin account for a paying company"""
+    if data.get("owner_key") != OWNER_MASTER_KEY:
+        raise HTTPException(status_code=403, detail="Invalid owner credentials")
+    
+    email = data.get("email", "").lower()
+    if not email or not data.get("password") or not data.get("company_name"):
+        raise HTTPException(status_code=400, detail="Email, password, and company name required")
+    
+    existing = users_collection.find_one({"email": email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    admin_dict = {
+        "email": email,
+        "password": hash_password(data["password"]),
+        "name": data.get("contact_name", "Admin"),
+        "company_name": data["company_name"],
+        "contact_name": data.get("contact_name", ""),
+        "role": "admin",
+        "assigned_projects": [],
+        "created_at": datetime.utcnow(),
+        "is_active": True,
+        "created_by_owner": True
+    }
+    result = users_collection.insert_one(admin_dict)
+    
+    return {
+        "id": str(result.inserted_id),
+        "email": email,
+        "company_name": data["company_name"],
+        "message": "Admin account created successfully"
+    }
+
+@app.delete("/api/owner/admins/{admin_id}")
+def owner_delete_admin(admin_id: str, owner_key: str):
+    """Owner deletes an admin account"""
+    if owner_key != OWNER_MASTER_KEY:
+        raise HTTPException(status_code=403, detail="Invalid owner credentials")
+    
+    result = users_collection.delete_one({"_id": ObjectId(admin_id), "role": "admin"})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Admin not found")
+    
+    return {"message": "Admin account deleted"}
+
+@app.put("/api/owner/admins/{admin_id}")
+def owner_update_admin(admin_id: str, data: dict):
+    """Owner updates an admin account"""
+    if data.get("owner_key") != OWNER_MASTER_KEY:
+        raise HTTPException(status_code=403, detail="Invalid owner credentials")
+    
+    update_data = {}
+    if "is_active" in data:
+        update_data["is_active"] = data["is_active"]
+    if "company_name" in data:
+        update_data["company_name"] = data["company_name"]
+    if "password" in data:
+        update_data["password"] = hash_password(data["password"])
+    
+    if update_data:
+        update_data["updated_at"] = datetime.utcnow()
+        users_collection.update_one(
+            {"_id": ObjectId(admin_id), "role": "admin"},
+            {"$set": update_data}
+        )
+    
+    return {"message": "Admin account updated"}
+
 @app.post("/api/setup/init-admin")
 def init_admin():
     """Initialize the first admin account"""
