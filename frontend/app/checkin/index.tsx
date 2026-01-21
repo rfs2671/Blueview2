@@ -1,385 +1,249 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  FlatList,
-  RefreshControl,
+  ActivityIndicator,
   Alert,
   Platform,
-  Modal,
-  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import * as Haptics from 'expo-haptics';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
-import { COLORS } from '../../src/constants/colors';
-import { api } from '../../src/utils/api';
+import Constants from 'expo-constants';
 
-interface Project {
-  id: string;
-  name: string;
-  location: string;
-  qr_code: string;
-}
+const COLORS = {
+  background: '#0A1929',
+  surface: '#132F4C',
+  surfaceLight: '#1E3A5F',
+  primary: '#FF6B00',
+  secondary: '#00D4FF',
+  success: '#4CAF50',
+  warning: '#FFB800',
+  danger: '#FF4444',
+  text: '#FFFFFF',
+  textSecondary: '#B0BEC5',
+  border: '#2D4A6F',
+};
 
-interface Worker {
-  id: string;
-  name: string;
-  trade: string;
-  company: string;
-}
-
-interface CheckIn {
-  id: string;
-  worker_id: string;
-  worker_name: string;
-  worker_company: string;
-  worker_trade: string;
-  check_in_time: string;
-  check_out_time?: string;
+interface CheckinResult {
+  token: string;
+  worker: {
+    id: string;
+    name: string;
+    phone: string;
+    trade: string;
+  };
+  checkin_time: string;
 }
 
 export default function CheckInScreen() {
+  const { token, project } = useLocalSearchParams<{ token: string; project: string }>();
   const router = useRouter();
-  const { projectId } = useLocalSearchParams();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [workers, setWorkers] = useState<Worker[]>([]);
-  const [checkins, setCheckins] = useState<CheckIn[]>([]);
-  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [showProjectPicker, setShowProjectPicker] = useState(false);
-  const [showWorkerPicker, setShowWorkerPicker] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [loading, setLoading] = useState(true);
+  
+  const [status, setStatus] = useState<'loading' | 'ready' | 'checking' | 'success' | 'error'>('loading');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [checkinResult, setCheckinResult] = useState<CheckinResult | null>(null);
+  
+  const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || 
+    process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
   useEffect(() => {
-    fetchInitialData();
-  }, []);
-
-  useEffect(() => {
-    if (selectedProject) {
-      fetchCheckins();
+    if (!token) {
+      setStatus('error');
+      setErrorMessage('Invalid check-in link. Please use the link from your SMS.');
+      return;
     }
-  }, [selectedProject]);
+    
+    requestLocationPermission();
+  }, [token]);
 
-  const fetchInitialData = async () => {
+  const requestLocationPermission = async () => {
     try {
-      const [projectsData, workersData] = await Promise.all([
-        api.getProjects(),
-        api.getWorkers(),
-      ]);
-      setProjects(Array.isArray(projectsData) ? projectsData : []);
-      setWorkers(Array.isArray(workersData) ? workersData : []);
-
-      // Pre-select project if passed
-      if (projectId && Array.isArray(projectsData)) {
-        const project = projectsData.find((p: Project) => p.id === projectId);
-        if (project) setSelectedProject(project);
-      } else if (projectsData.length > 0) {
-        setSelectedProject(projectsData[0]);
+      const { status: permStatus } = await Location.requestForegroundPermissionsAsync();
+      
+      if (permStatus !== 'granted') {
+        setStatus('error');
+        setErrorMessage('Location permission is required to check in. Please enable location access and try again.');
+        return;
       }
-    } catch (error) {
-      console.log('Error fetching data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchCheckins = async () => {
-    if (!selectedProject) return;
-    try {
-      const data = await api.getActiveCheckins(selectedProject.id);
-      setCheckins(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.log('Error fetching checkins:', error);
-    }
-  };
-
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    if (Platform.OS !== 'web') {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    }
-    await fetchCheckins();
-    setRefreshing(false);
-  }, [selectedProject]);
-
-  const handleCheckIn = async (worker: Worker) => {
-    if (!selectedProject) return;
-
-    try {
-      await api.createCheckin({
-        worker_id: worker.id,
-        project_id: selectedProject.id,
+      
+      const loc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
       });
-      if (Platform.OS !== 'web') {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      }
-      setShowWorkerPicker(false);
-      fetchCheckins();
-      Alert.alert('Success', `${worker.name} checked in!`);
-    } catch (error: any) {
-      Alert.alert('Error', error?.detail || 'Failed to check in worker');
-    }
-  };
-
-  const handleCheckOut = async (checkin: CheckIn) => {
-    try {
-      await api.checkout(checkin.id);
-      if (Platform.OS !== 'web') {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      }
-      fetchCheckins();
-      Alert.alert('Success', `${checkin.worker_name} checked out!`);
+      
+      setLocation({
+        latitude: loc.coords.latitude,
+        longitude: loc.coords.longitude,
+      });
+      setStatus('ready');
+      
     } catch (error) {
-      Alert.alert('Error', 'Failed to check out worker');
+      setStatus('error');
+      setErrorMessage('Could not get your location. Please ensure GPS is enabled and try again.');
     }
   };
 
-  const formatTime = (isoString: string) => {
-    const date = new Date(isoString);
-    return date.toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
+  const handleCheckin = async () => {
+    if (!location || !token) return;
+    
+    setStatus('checking');
+    
+    try {
+      const response = await fetch(`${API_URL}/api/checkin/fast-login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          token: token,
+          latitude: location.latitude,
+          longitude: location.longitude,
+        }),
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || 'Check-in failed');
+      }
+      
+      const result: CheckinResult = await response.json();
+      setCheckinResult(result);
+      setStatus('success');
+      
+    } catch (error: any) {
+      setStatus('error');
+      setErrorMessage(error.message || 'Check-in failed. Please try again.');
+    }
   };
 
-  const getAvailableWorkers = () => {
-    const checkedInWorkerIds = checkins.map((c) => c.worker_id);
-    return workers.filter((w) => !checkedInWorkerIds.includes(w.id));
+  const renderContent = () => {
+    switch (status) {
+      case 'loading':
+        return (
+          <View style={styles.centerContent}>
+            <ActivityIndicator size="large" color={COLORS.primary} />
+            <Text style={styles.loadingText}>Getting your location...</Text>
+            <Text style={styles.loadingSubtext}>Please allow location access when prompted</Text>
+          </View>
+        );
+        
+      case 'ready':
+        return (
+          <View style={styles.centerContent}>
+            <View style={styles.iconCircle}>
+              <Ionicons name="location" size={60} color={COLORS.success} />
+            </View>
+            <Text style={styles.readyTitle}>Ready to Check In</Text>
+            <Text style={styles.readySubtitle}>
+              Your location has been confirmed.{'\n'}Tap the button below to complete check-in.
+            </Text>
+            
+            {location && (
+              <View style={styles.locationBox}>
+                <Ionicons name="navigate" size={18} color={COLORS.secondary} />
+                <Text style={styles.locationText}>
+                  {location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}
+                </Text>
+              </View>
+            )}
+            
+            <TouchableOpacity style={styles.checkinButton} onPress={handleCheckin}>
+              <Ionicons name="checkmark-circle" size={24} color={COLORS.text} />
+              <Text style={styles.checkinButtonText}>Check In Now</Text>
+            </TouchableOpacity>
+          </View>
+        );
+        
+      case 'checking':
+        return (
+          <View style={styles.centerContent}>
+            <ActivityIndicator size="large" color={COLORS.primary} />
+            <Text style={styles.loadingText}>Checking you in...</Text>
+          </View>
+        );
+        
+      case 'success':
+        return (
+          <View style={styles.centerContent}>
+            <View style={[styles.iconCircle, { backgroundColor: COLORS.success + '20' }]}>
+              <Ionicons name="checkmark-circle" size={80} color={COLORS.success} />
+            </View>
+            <Text style={styles.successTitle}>Check-In Complete!</Text>
+            
+            {checkinResult && (
+              <View style={styles.workerCard}>
+                <Text style={styles.workerName}>{checkinResult.worker.name}</Text>
+                <Text style={styles.workerTrade}>{checkinResult.worker.trade}</Text>
+                <View style={styles.divider} />
+                <View style={styles.timeRow}>
+                  <Ionicons name="time" size={18} color={COLORS.secondary} />
+                  <Text style={styles.timeText}>
+                    {new Date(checkinResult.checkin_time).toLocaleTimeString()}
+                  </Text>
+                </View>
+              </View>
+            )}
+            
+            <Text style={styles.successSubtitle}>
+              Your check-in has been recorded and your credentials have been logged for today's DOB report.
+            </Text>
+            
+            <TouchableOpacity 
+              style={styles.viewPassportButton}
+              onPress={() => router.replace('/')}
+            >
+              <Text style={styles.viewPassportText}>Go to Dashboard</Text>
+            </TouchableOpacity>
+          </View>
+        );
+        
+      case 'error':
+        return (
+          <View style={styles.centerContent}>
+            <View style={[styles.iconCircle, { backgroundColor: COLORS.danger + '20' }]}>
+              <Ionicons name="alert-circle" size={80} color={COLORS.danger} />
+            </View>
+            <Text style={styles.errorTitle}>Check-In Failed</Text>
+            <Text style={styles.errorMessage}>{errorMessage}</Text>
+            
+            <TouchableOpacity 
+              style={styles.retryButton}
+              onPress={() => {
+                setStatus('loading');
+                setErrorMessage('');
+                requestLocationPermission();
+              }}
+            >
+              <Ionicons name="refresh" size={20} color={COLORS.text} />
+              <Text style={styles.retryText}>Try Again</Text>
+            </TouchableOpacity>
+          </View>
+        );
+    }
   };
-
-  const renderCheckin = ({ item }: { item: CheckIn }) => (
-    <View style={styles.checkinCard}>
-      <View style={styles.workerAvatar}>
-        <Text style={styles.avatarText}>
-          {item.worker_name.split(' ').map((n) => n[0]).join('').toUpperCase()}
-        </Text>
-      </View>
-      
-      <View style={styles.checkinInfo}>
-        <Text style={styles.workerName}>{item.worker_name}</Text>
-        <Text style={styles.workerTrade}>{item.worker_trade}</Text>
-        <Text style={styles.workerCompany}>{item.worker_company}</Text>
-      </View>
-      
-      <View style={styles.checkinRight}>
-        <View style={styles.timeContainer}>
-          <Ionicons name="time" size={14} color={COLORS.success} />
-          <Text style={styles.timeText}>{formatTime(item.check_in_time)}</Text>
-        </View>
-        <TouchableOpacity
-          style={styles.checkoutButton}
-          onPress={() => handleCheckOut(item)}
-        >
-          <Ionicons name="exit-outline" size={18} color={COLORS.danger} />
-          <Text style={styles.checkoutText}>Out</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-        </View>
-      </SafeAreaView>
-    );
-  }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-        >
-          <Ionicons name="arrow-back" size={24} color={COLORS.text} />
-        </TouchableOpacity>
-        <View style={styles.headerTitleContainer}>
-          <Text style={styles.headerTitle}>Check-In</Text>
-          <Text style={styles.headerSubtitle}>{checkins.length} On-Site</Text>
+        <View style={styles.logo}>
+          <Text style={styles.logoText}>BLUEVIEW</Text>
         </View>
-        <TouchableOpacity
-          style={styles.addButton}
-          onPress={() => {
-            if (workers.length === 0) {
-              Alert.alert('No Workers', 'Please add workers first', [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Add Workers', onPress: () => router.push('/workers') },
-              ]);
-              return;
-            }
-            if (Platform.OS !== 'web') {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            }
-            setShowWorkerPicker(true);
-          }}
-        >
-          <Ionicons name="person-add" size={22} color={COLORS.text} />
-        </TouchableOpacity>
+        <Text style={styles.headerSubtitle}>Site Check-In</Text>
       </View>
 
-      {/* Project Selector */}
-      <TouchableOpacity
-        style={styles.projectSelector}
-        onPress={() => setShowProjectPicker(true)}
-      >
-        <View style={styles.projectSelectorLeft}>
-          <Ionicons name="business" size={20} color={COLORS.primary} />
-          <Text style={styles.projectSelectorText}>
-            {selectedProject?.name || 'Select Project'}
-          </Text>
-        </View>
-        <View style={styles.projectSelectorRight}>
-          {selectedProject && (
-            <View style={styles.qrBadge}>
-              <Text style={styles.qrText}>{selectedProject.qr_code}</Text>
-            </View>
-          )}
-          <Ionicons name="chevron-down" size={20} color={COLORS.textSecondary} />
-        </View>
-      </TouchableOpacity>
+      {renderContent()}
 
-      {/* Checkins List */}
-      {projects.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Ionicons name="business-outline" size={64} color={COLORS.textSecondary} />
-          <Text style={styles.emptyTitle}>No Projects</Text>
-          <Text style={styles.emptySubtitle}>Create a project first to start checking in workers</Text>
-          <TouchableOpacity
-            style={styles.addFirstButton}
-            onPress={() => router.push('/projects')}
-          >
-            <Text style={styles.addFirstText}>Create Project</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <FlatList
-          data={checkins}
-          renderItem={renderCheckin}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={[
-            styles.listContent,
-            checkins.length === 0 && styles.emptyListContent,
-          ]}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={COLORS.primary}
-              colors={[COLORS.primary]}
-            />
-          }
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Ionicons name="people-outline" size={64} color={COLORS.textSecondary} />
-              <Text style={styles.emptyTitle}>No Workers On-Site</Text>
-              <Text style={styles.emptySubtitle}>Tap + to check in a worker</Text>
-            </View>
-          }
-          showsVerticalScrollIndicator={false}
-        />
-      )}
-
-      {/* Project Picker Modal */}
-      <Modal
-        visible={showProjectPicker}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowProjectPicker(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Project</Text>
-              <TouchableOpacity onPress={() => setShowProjectPicker(false)}>
-                <Ionicons name="close" size={24} color={COLORS.text} />
-              </TouchableOpacity>
-            </View>
-            <FlatList
-              data={projects}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[
-                    styles.pickerItem,
-                    selectedProject?.id === item.id && styles.pickerItemSelected,
-                  ]}
-                  onPress={() => {
-                    setSelectedProject(item);
-                    setShowProjectPicker(false);
-                    if (Platform.OS !== 'web') {
-                      Haptics.selectionAsync();
-                    }
-                  }}
-                >
-                  <View style={styles.pickerItemLeft}>
-                    <Text style={styles.pickerItemTitle}>{item.name}</Text>
-                    <Text style={styles.pickerItemSubtitle}>{item.location}</Text>
-                  </View>
-                  {selectedProject?.id === item.id && (
-                    <Ionicons name="checkmark" size={24} color={COLORS.primary} />
-                  )}
-                </TouchableOpacity>
-              )}
-            />
-          </View>
-        </View>
-      </Modal>
-
-      {/* Worker Picker Modal */}
-      <Modal
-        visible={showWorkerPicker}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowWorkerPicker(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Check In Worker</Text>
-              <TouchableOpacity onPress={() => setShowWorkerPicker(false)}>
-                <Ionicons name="close" size={24} color={COLORS.text} />
-              </TouchableOpacity>
-            </View>
-            <FlatList
-              data={getAvailableWorkers()}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.pickerItem}
-                  onPress={() => handleCheckIn(item)}
-                >
-                  <View style={styles.workerAvatar}>
-                    <Text style={styles.avatarText}>
-                      {item.name.split(' ').map((n) => n[0]).join('').toUpperCase()}
-                    </Text>
-                  </View>
-                  <View style={styles.pickerItemLeft}>
-                    <Text style={styles.pickerItemTitle}>{item.name}</Text>
-                    <Text style={styles.pickerItemSubtitle}>
-                      {item.trade} • {item.company}
-                    </Text>
-                  </View>
-                  <Ionicons name="add-circle" size={28} color={COLORS.success} />
-                </TouchableOpacity>
-              )}
-              ListEmptyComponent={
-                <View style={styles.emptyPickerState}>
-                  <Text style={styles.emptyPickerText}>All workers are checked in</Text>
-                </View>
-              }
-            />
-          </View>
-        </View>
-      </Modal>
+      {/* Footer */}
+      <View style={styles.footer}>
+        <Text style={styles.footerText}>
+          Your check-in is recorded for NYC DOB compliance
+        </Text>
+      </View>
     </SafeAreaView>
   );
 }
@@ -389,246 +253,190 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background,
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   header: {
-    flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 20,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-  backButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  logo: {
+    marginBottom: 4,
+  },
+  logoText: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: COLORS.primary,
+    letterSpacing: 2,
+  },
+  headerSubtitle: {
+    fontSize: 14,
+    color: COLORS.textSecondary,
+  },
+  centerContent: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+  },
+  iconCircle: {
+    width: 140,
+    height: 140,
+    borderRadius: 70,
     backgroundColor: COLORS.surface,
     justifyContent: 'center',
     alignItems: 'center',
+    marginBottom: 24,
   },
-  headerTitleContainer: {
-    flex: 1,
-    marginLeft: 12,
+  loadingText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: COLORS.text,
+    marginTop: 20,
   },
-  headerTitle: {
-    fontSize: 20,
+  loadingSubtext: {
+    fontSize: 14,
+    color: COLORS.textSecondary,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  readyTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 12,
+  },
+  readySubtitle: {
+    fontSize: 15,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  locationBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    marginTop: 20,
+    gap: 8,
+  },
+  locationText: {
+    fontSize: 13,
+    color: COLORS.secondary,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  checkinButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.success,
+    paddingHorizontal: 40,
+    paddingVertical: 18,
+    borderRadius: 16,
+    marginTop: 32,
+    gap: 12,
+  },
+  checkinButtonText: {
+    fontSize: 18,
     fontWeight: '700',
     color: COLORS.text,
   },
-  headerSubtitle: {
-    fontSize: 13,
-    color: COLORS.textSecondary,
-    marginTop: 2,
+  successTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: COLORS.success,
+    marginBottom: 16,
   },
-  addButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.success,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  projectSelector: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  workerCard: {
     backgroundColor: COLORS.surface,
-    marginHorizontal: 16,
-    marginTop: 16,
-    borderRadius: 12,
-    padding: 14,
-  },
-  projectSelectorLeft: {
-    flexDirection: 'row',
+    borderRadius: 16,
+    padding: 20,
+    width: '100%',
     alignItems: 'center',
-    gap: 10,
+    marginBottom: 20,
   },
-  projectSelectorText: {
-    fontSize: 16,
-    fontWeight: '600',
+  workerName: {
+    fontSize: 22,
+    fontWeight: '700',
     color: COLORS.text,
   },
-  projectSelectorRight: {
+  workerTrade: {
+    fontSize: 14,
+    color: COLORS.textSecondary,
+    marginTop: 4,
+  },
+  divider: {
+    width: '100%',
+    height: 1,
+    backgroundColor: COLORS.border,
+    marginVertical: 16,
+  },
+  timeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  qrBadge: {
-    backgroundColor: COLORS.surfaceLight,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  qrText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.secondary,
-    letterSpacing: 1,
-  },
-  listContent: {
-    padding: 16,
-  },
-  emptyListContent: {
-    flex: 1,
-  },
-  checkinCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 10,
-  },
-  workerAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  checkinInfo: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  workerName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  workerTrade: {
-    fontSize: 13,
-    color: COLORS.secondary,
-    marginTop: 1,
-  },
-  workerCompany: {
-    fontSize: 12,
-    color: COLORS.textSecondary,
-    marginTop: 1,
-  },
-  checkinRight: {
-    alignItems: 'flex-end',
-  },
-  timeContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginBottom: 6,
-  },
   timeText: {
-    fontSize: 12,
-    color: COLORS.success,
+    fontSize: 16,
+    color: COLORS.secondary,
     fontWeight: '600',
   },
-  checkoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.danger + '20',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
-    gap: 4,
-  },
-  checkoutText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.danger,
-  },
-  emptyState: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 40,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginTop: 16,
-  },
-  emptySubtitle: {
+  successSubtitle: {
     fontSize: 14,
     color: COLORS.textSecondary,
     textAlign: 'center',
-    marginTop: 8,
+    lineHeight: 20,
+    paddingHorizontal: 20,
   },
-  addFirstButton: {
+  viewPassportButton: {
     backgroundColor: COLORS.primary,
-    paddingHorizontal: 24,
+    paddingHorizontal: 32,
     paddingVertical: 14,
     borderRadius: 12,
     marginTop: 24,
   },
-  addFirstText: {
+  viewPassportText: {
     fontSize: 16,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: COLORS.surface,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    paddingBottom: 40,
-    maxHeight: '70%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  modalTitle: {
-    fontSize: 20,
     fontWeight: '700',
     color: COLORS.text,
   },
-  pickerItem: {
+  errorTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: COLORS.danger,
+    marginBottom: 12,
+  },
+  errorMessage: {
+    fontSize: 15,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  retryButton: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    paddingHorizontal: 32,
     paddingVertical: 14,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginBottom: 6,
-    backgroundColor: COLORS.surfaceLight,
+    borderRadius: 12,
+    marginTop: 24,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
-  pickerItemSelected: {
-    backgroundColor: COLORS.primary + '20',
-  },
-  pickerItemLeft: {
-    flex: 1,
-    marginLeft: 10,
-  },
-  pickerItemTitle: {
+  retryText: {
     fontSize: 16,
     fontWeight: '600',
     color: COLORS.text,
   },
-  pickerItemSubtitle: {
-    fontSize: 13,
-    color: COLORS.textSecondary,
-    marginTop: 2,
-  },
-  emptyPickerState: {
-    padding: 30,
+  footer: {
+    paddingVertical: 16,
     alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
   },
-  emptyPickerText: {
-    fontSize: 15,
+  footerText: {
+    fontSize: 12,
     color: COLORS.textSecondary,
   },
 });
