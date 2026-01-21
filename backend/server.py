@@ -65,6 +65,20 @@ projects_collection = db["projects"]
 checkins_collection = db["checkins"]
 daily_logs_collection = db["daily_logs"]
 documents_collection = db["documents"]
+subcontractors_collection = db["subcontractors"]
+material_requests_collection = db["material_requests"]
+geofence_events_collection = db["geofence_events"]
+sms_logs_collection = db["sms_logs"]
+dob_daily_logs_collection = db["dob_daily_logs"]
+
+# Twilio Configuration (MOCKED until credentials provided)
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
+
+# Radar.io Configuration (MOCKED until credentials provided)
+RADAR_API_KEY = os.getenv("RADAR_API_KEY")
+RADAR_SECRET_KEY = os.getenv("RADAR_SECRET_KEY")
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
