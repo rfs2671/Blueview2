@@ -339,19 +339,8 @@ export default function HomeScreen() {
           />
         )}
 
-        {/* Worker: My Passport */}
-        {user?.role === 'worker' && user?.has_passport && (
-          <QuickActionCard
-            icon="id-card"
-            title="My Passport"
-            subtitle="View your worker passport"
-            color={COLORS.primary}
-            onPress={() => handleNavigation(`/workers/${user.worker_passport_id}`)}
-          />
-        )}
-
         {/* Recent Projects */}
-        {recentProjects.length > 0 && (user?.role === 'admin' || user?.role === 'cp') && (
+        {recentProjects.length > 0 && (user?.role === 'admin' || user?.role === 'cp' || user?.role === 'subcontractor') && (
           <>
             <Text style={styles.sectionTitle}>Recent Projects</Text>
             {recentProjects.map((project) => (
