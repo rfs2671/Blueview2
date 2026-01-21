@@ -70,6 +70,12 @@ material_requests_collection = db["material_requests"]
 geofence_events_collection = db["geofence_events"]
 sms_logs_collection = db["sms_logs"]
 dob_daily_logs_collection = db["dob_daily_logs"]
+report_settings_collection = db["report_settings"]
+trade_mappings_collection = db["trade_mappings"]
+nfc_tags_collection = db["nfc_tags"]
+generated_reports_collection = db["generated_reports"]
+safety_orientations_collection = db["safety_orientations"]
+safety_meetings_collection = db["safety_meetings"]
 
 # Twilio Configuration (MOCKED until credentials provided)
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
