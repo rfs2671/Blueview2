@@ -1469,11 +1469,16 @@ def init_admin():
     """Initialize the first admin account"""
     existing_admin = users_collection.find_one({"role": "admin"})
     if existing_admin:
-        raise HTTPException(status_code=400, detail="Admin already exists")
+        # Return existing admin info (without password)
+        return {
+            "message": "Admin already exists",
+            "email": existing_admin["email"],
+            "note": "Use existing credentials to login"
+        }
     
     admin_dict = {
         "email": "admin@blueview.com",
-        "password": hash_password("admin123"),
+        "password": hash_password("BlueviewAdmin123"),
         "name": "Site Admin",
         "role": "admin",
         "assigned_projects": [],
@@ -1483,9 +1488,31 @@ def init_admin():
     
     return {
         "message": "Admin created successfully",
-        "email": "admin@blueview.com",
-        "password": "admin123",
-        "note": "Please change the password immediately!"
+        "credentials": {
+            "email": "admin@blueview.com",
+            "password": "BlueviewAdmin123"
+        },
+        "note": "Please save these credentials securely!"
+    }
+
+@app.get("/api/setup/status")
+def get_setup_status():
+    """Check setup status - for testing purposes"""
+    admin_exists = users_collection.find_one({"role": "admin"}) is not None
+    project_count = projects_collection.count_documents({})
+    worker_count = workers_collection.count_documents({})
+    
+    return {
+        "admin_exists": admin_exists,
+        "project_count": project_count,
+        "worker_count": worker_count,
+        "database": "MongoDB Atlas",
+        "integrations": {
+            "google_oauth": bool(GOOGLE_CLIENT_ID),
+            "openweather": bool(OPENWEATHER_API_KEY),
+            "resend_email": bool(RESEND_API_KEY),
+            "dropbox": bool(DROPBOX_APP_KEY and DROPBOX_APP_SECRET)
+        }
     }
 
 if __name__ == "__main__":
