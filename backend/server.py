@@ -365,6 +365,67 @@ class DOBDailyLogEntry(BaseModel):
     gps_lng: float
     signature_confirmed: bool = False
 
+# ============== REPORT SETTINGS MODELS ==============
+
+class ReportSettingsCreate(BaseModel):
+    """Admin report configuration per project"""
+    project_id: str
+    email_recipients: List[str]  # List of email addresses
+    report_trigger_time: str = "17:00"  # 24hr format, default 5 PM
+    auto_send_enabled: bool = True
+    include_jobsite_log: bool = True
+    include_safety_orientation: bool = True
+    include_safety_meeting: bool = True
+
+class TradeMappingCreate(BaseModel):
+    """Map trade to legal subcontractor name"""
+    trade: str  # e.g., "Framing"
+    legal_name: str  # e.g., "ODD LLC"
+    
+class NFCTagCreate(BaseModel):
+    """NFC tag registration for a job site"""
+    project_id: str
+    tag_id: str  # Unique NFC tag identifier
+    location_description: str = ""
+
+class NFCCheckInRequest(BaseModel):
+    """Worker check-in via NFC tag"""
+    tag_id: str
+    worker_id: str
+    signature: Optional[str] = None  # base64
+
+class SafetyOrientationEntry(BaseModel):
+    """Worker safety orientation sign-in"""
+    worker_name: str
+    signature: str  # base64
+    company_name: str
+    position: str
+    osha_40hr: bool = False
+    osha_62hr: bool = False
+    osha_card_number: str
+    general_info_initials: str
+    incident_reporting_initials: str
+    ppe_initials: str
+    fall_protection_initials: str
+
+class SafetyMeetingEntry(BaseModel):
+    """Pre-shift safety meeting attendance"""
+    worker_name: str
+    osha_number: str
+    signature: str  # base64
+
+class SafetyMeetingCreate(BaseModel):
+    """Pre-shift safety meeting record"""
+    project_id: str
+    company: str
+    meeting_date: str
+    meeting_time: str
+    dob_permit_number: Optional[str] = None
+    competent_person: str
+    daily_activities: str
+    safety_concerns: str
+    attendees: List[SafetyMeetingEntry]
+
 # ============== HEALTH CHECK ==============
 
 @app.get("/api/health")
