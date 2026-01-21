@@ -172,6 +172,7 @@ export default function HomeScreen() {
     switch (role) {
       case 'admin': return COLORS.primary;
       case 'cp': return COLORS.secondary;
+      case 'subcontractor': return '#E91E63';
       default: return COLORS.success;
     }
   };
