@@ -157,35 +157,34 @@ export default function LoginScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Divider */}
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>OR</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          {/* Worker Login */}
-          <View style={styles.workerSection}>
-            <Text style={styles.workerTitle}>Field Worker?</Text>
-            <Text style={styles.workerSubtitle}>
-              Sign in with Google to create your Worker Passport
-            </Text>
-
-            <TouchableOpacity
-              style={styles.googleButton}
-              onPress={handleGoogleLogin}
-              disabled={loading}
-            >
-              <Ionicons name="logo-google" size={20} color="#4285F4" />
-              <Text style={styles.googleButtonText}>Continue with Google</Text>
-            </TouchableOpacity>
+          {/* Info Section */}
+          <View style={styles.infoSection}>
+            <View style={styles.infoCard}>
+              <Ionicons name="person-circle" size={24} color={COLORS.primary} />
+              <View style={styles.infoContent}>
+                <Text style={styles.infoTitle}>Admin / Subcontractor Login</Text>
+                <Text style={styles.infoText}>
+                  Use your credentials provided by your administrator
+                </Text>
+              </View>
+            </View>
+            
+            <View style={styles.infoCard}>
+              <Ionicons name="phone-portrait" size={24} color={COLORS.success} />
+              <View style={styles.infoContent}>
+                <Text style={styles.infoTitle}>Field Workers</Text>
+                <Text style={styles.infoText}>
+                  Check in via the SMS link sent when you arrive at the job site
+                </Text>
+              </View>
+            </View>
           </View>
 
           {/* Demo Info */}
           <View style={styles.demoInfo}>
             <Ionicons name="information-circle" size={18} color={COLORS.secondary} />
             <Text style={styles.demoInfoText}>
-              Admin: admin@blueview.com / BlueviewAdmin123
+              Demo Admin: admin@blueview.com / BlueviewAdmin123
             </Text>
           </View>
         </ScrollView>
