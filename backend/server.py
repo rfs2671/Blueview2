@@ -1112,6 +1112,356 @@ def get_dropbox_status(current_user: dict = Depends(get_current_user)):
         "connected_at": user.get("dropbox_connected_at") if user else None
     }
 
+# ============== SAMPLE/DEMO DAILY REPORT ==============
+
+@app.get("/api/demo/sample-report")
+def generate_sample_daily_report():
+    """Generate a complete sample daily report PDF for demo purposes"""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+    
+    # Sample data for demo
+    sample_project = {
+        "name": "Downtown Tower Phase 2",
+        "location": "123 Main Street, New York, NY 10001",
+        "qr_code": "DTT-2025"
+    }
+    
+    sample_weather = {
+        "temperature": 72,
+        "conditions": "Partly Cloudy",
+        "humidity": 45,
+        "wind_speed": 8
+    }
+    
+    sample_workers = [
+        {"name": "John Rodriguez", "trade": "Electrician", "company": "ABC Electric", "osha": "OSH-12345", "check_in": "06:45 AM", "signed": True},
+        {"name": "Mike Chen", "trade": "Carpenter", "company": "Pro Framing LLC", "osha": "OSH-23456", "check_in": "06:50 AM", "signed": True},
+        {"name": "Sarah Johnson", "trade": "Plumber", "company": "City Plumbing", "osha": "OSH-34567", "check_in": "07:00 AM", "signed": True},
+        {"name": "Carlos Martinez", "trade": "HVAC Tech", "company": "Cool Air Systems", "osha": "OSH-45678", "check_in": "07:15 AM", "signed": True},
+        {"name": "David Williams", "trade": "Welder", "company": "Steel Works Inc", "osha": "OSH-56789", "check_in": "07:20 AM", "signed": True},
+        {"name": "James Brown", "trade": "Mason", "company": "Brick Masters", "osha": "OSH-67890", "check_in": "07:30 AM", "signed": True},
+        {"name": "Robert Davis", "trade": "Roofer", "company": "Top Cover Co", "osha": "OSH-78901", "check_in": "07:35 AM", "signed": True},
+        {"name": "Lisa Anderson", "trade": "Painter", "company": "Color Pro", "osha": "OSH-89012", "check_in": "07:45 AM", "signed": True},
+    ]
+    
+    sample_subcontractors = [
+        {
+            "company": "ABC Electric",
+            "workers": 2,
+            "work": "Completed rough-in wiring for floors 12-14. Installed electrical panels in mechanical room.",
+            "cleanliness": "pass",
+            "safety": "pass"
+        },
+        {
+            "company": "Pro Framing LLC",
+            "workers": 3,
+            "work": "Framing completed for units 1201-1208. Started interior wall layout for floor 13.",
+            "cleanliness": "pass",
+            "safety": "pass"
+        },
+        {
+            "company": "City Plumbing",
+            "workers": 2,
+            "work": "Installed waste lines for bathrooms on floor 11. Pressure tested supply lines.",
+            "cleanliness": "pass",
+            "safety": "pass"
+        },
+        {
+            "company": "Cool Air Systems",
+            "workers": 1,
+            "work": "Ductwork installation 75% complete on floor 10. Started VAV box mounting.",
+            "cleanliness": "pass",
+            "safety": "pass"
+        }
+    ]
+    
+    # Build PDF
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.4*inch, bottomMargin=0.5*inch, leftMargin=0.5*inch, rightMargin=0.5*inch)
+    
+    styles = getSampleStyleSheet()
+    
+    # Custom styles
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=28, spaceAfter=5, textColor=colors.HexColor('#FF6B00'), alignment=TA_CENTER)
+    subtitle_style = ParagraphStyle('Subtitle', parent=styles['Normal'], fontSize=12, textColor=colors.HexColor('#666666'), alignment=TA_CENTER, spaceAfter=20)
+    heading_style = ParagraphStyle('Heading', parent=styles['Heading2'], fontSize=14, spaceAfter=10, spaceBefore=15, textColor=colors.HexColor('#132F4C'), borderPadding=5)
+    normal_style = styles['Normal']
+    small_style = ParagraphStyle('Small', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#555555'))
+    
+    elements = []
+    
+    # Header
+    elements.append(Paragraph("BLUEVIEW", title_style))
+    elements.append(Paragraph("Daily Field Report", subtitle_style))
+    
+    # Report metadata
+    report_date = date.today().strftime("%B %d, %Y")
+    report_time = datetime.now().strftime("%I:%M %p")
+    
+    # Project Info Box
+    project_data = [
+        ["PROJECT", sample_project["name"]],
+        ["LOCATION", sample_project["location"]],
+        ["DATE", report_date],
+        ["REPORT ID", f"RPT-{date.today().strftime('%Y%m%d')}-001"],
+        ["GENERATED", f"{report_date} at {report_time}"],
+    ]
+    project_table = Table(project_data, colWidths=[1.5*inch, 5.5*inch])
+    project_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#132F4C')),
+        ('TEXTCOLOR', (0, 0), (0, -1), colors.white),
+        ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#333333')),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('PADDING', (0, 0), (-1, -1), 10),
+        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CCCCCC')),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    elements.append(project_table)
+    elements.append(Spacer(1, 0.25*inch))
+    
+    # Weather Section
+    elements.append(Paragraph("WEATHER CONDITIONS", heading_style))
+    weather_data = [
+        ["Temperature", "Conditions", "Humidity", "Wind"],
+        [f"{sample_weather['temperature']}°F", sample_weather['conditions'], f"{sample_weather['humidity']}%", f"{sample_weather['wind_speed']} mph"]
+    ]
+    weather_table = Table(weather_data, colWidths=[1.75*inch, 1.75*inch, 1.75*inch, 1.75*inch])
+    weather_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4A90D9')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 11),
+        ('PADDING', (0, 0), (-1, -1), 10),
+        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CCCCCC')),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BACKGROUND', (0, 1), (-1, 1), colors.HexColor('#F5F9FF')),
+    ]))
+    elements.append(weather_table)
+    elements.append(Spacer(1, 0.25*inch))
+    
+    # Worker Sign-In Ledger
+    elements.append(Paragraph(f"WORKER SIGN-IN LEDGER ({len(sample_workers)} Workers)", heading_style))
+    worker_data = [["#", "Name", "Trade", "Company", "OSHA #", "Check-In", "Signed"]]
+    for i, w in enumerate(sample_workers, 1):
+        worker_data.append([
+            str(i),
+            w["name"],
+            w["trade"],
+            w["company"],
+            w["osha"],
+            w["check_in"],
+            "✓" if w["signed"] else "✗"
+        ])
+    
+    worker_table = Table(worker_data, colWidths=[0.35*inch, 1.4*inch, 0.95*inch, 1.25*inch, 0.9*inch, 0.8*inch, 0.5*inch])
+    worker_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#FF6B00')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ('PADDING', (0, 0), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CCCCCC')),
+        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+        ('ALIGN', (-2, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FFF8F3')]),
+        ('TEXTCOLOR', (-1, 1), (-1, -1), colors.HexColor('#4CAF50')),
+    ]))
+    elements.append(worker_table)
+    elements.append(Spacer(1, 0.3*inch))
+    
+    # Subcontractor Work Summary
+    elements.append(Paragraph("SUBCONTRACTOR WORK SUMMARY", heading_style))
+    
+    for sub in sample_subcontractors:
+        sub_header = [[f"{sub['company']}", f"{sub['workers']} Workers", f"Safety: {sub['safety'].upper()}", f"Clean: {sub['cleanliness'].upper()}"]]
+        sub_header_table = Table(sub_header, colWidths=[2.5*inch, 1.25*inch, 1.5*inch, 1.5*inch])
+        sub_header_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, 0), colors.HexColor('#132F4C')),
+            ('TEXTCOLOR', (0, 0), (0, 0), colors.white),
+            ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
+            ('BACKGROUND', (1, 0), (1, 0), colors.HexColor('#2D4A6F')),
+            ('TEXTCOLOR', (1, 0), (1, 0), colors.white),
+            ('BACKGROUND', (2, 0), (2, 0), colors.HexColor('#4CAF50')),
+            ('TEXTCOLOR', (2, 0), (2, 0), colors.white),
+            ('BACKGROUND', (3, 0), (3, 0), colors.HexColor('#4CAF50')),
+            ('TEXTCOLOR', (3, 0), (3, 0), colors.white),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('PADDING', (0, 0), (-1, -1), 8),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        elements.append(sub_header_table)
+        
+        work_desc = [[Paragraph(f"<b>Work Performed:</b> {sub['work']}", small_style)]]
+        work_table = Table(work_desc, colWidths=[6.75*inch])
+        work_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#F5F5F5')),
+            ('PADDING', (0, 0), (-1, -1), 10),
+            ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#CCCCCC')),
+        ]))
+        elements.append(work_table)
+        elements.append(Spacer(1, 0.15*inch))
+    
+    # Site Inspection Summary
+    elements.append(Spacer(1, 0.1*inch))
+    elements.append(Paragraph("SITE INSPECTION SUMMARY", heading_style))
+    inspection_data = [
+        ["Inspection Item", "Status", "Notes"],
+        ["Housekeeping / Cleanliness", "PASS", "All areas clean and organized"],
+        ["PPE Compliance", "PASS", "All workers wearing required PPE"],
+        ["Fall Protection", "PASS", "Guardrails and harnesses in place"],
+        ["Fire Extinguishers", "PASS", "Inspected and accessible"],
+        ["Scaffolding Inspection", "PASS", "Daily inspection completed"],
+        ["Electrical Safety", "PASS", "GFCI protection verified"],
+    ]
+    inspection_table = Table(inspection_data, colWidths=[2.5*inch, 1*inch, 3.25*inch])
+    inspection_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#132F4C')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('PADDING', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CCCCCC')),
+        ('ALIGN', (1, 0), (1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')]),
+        ('TEXTCOLOR', (1, 1), (1, -1), colors.HexColor('#4CAF50')),
+        ('FONTNAME', (1, 1), (1, -1), 'Helvetica-Bold'),
+    ]))
+    elements.append(inspection_table)
+    
+    # Notes Section
+    elements.append(Spacer(1, 0.25*inch))
+    elements.append(Paragraph("ADDITIONAL NOTES", heading_style))
+    notes_text = """
+    • Material delivery scheduled for tomorrow at 7:00 AM - drywall for floors 12-15
+    • Crane inspection passed - certified until August 2025
+    • Safety meeting held at 6:30 AM - topic: Heat stress prevention
+    • No incidents or near-misses reported today
+    • Concrete pour for floor 16 scheduled for next Monday
+    """
+    elements.append(Paragraph(notes_text, small_style))
+    
+    # Footer
+    elements.append(Spacer(1, 0.4*inch))
+    footer_style = ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, textColor=colors.HexColor('#888888'), alignment=TA_CENTER)
+    elements.append(Paragraph("─" * 80, footer_style))
+    elements.append(Paragraph(f"Generated by Blueview Site Operations Hub | {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", footer_style))
+    elements.append(Paragraph("This report is automatically generated and distributed to project stakeholders.", footer_style))
+    
+    doc.build(elements)
+    
+    pdf_base64 = base64.b64encode(buffer.getvalue()).decode()
+    return {
+        "pdf_base64": pdf_base64,
+        "filename": f"BlueviewReport_Sample_{date.today().strftime('%Y%m%d')}.pdf",
+        "message": "Sample daily report generated successfully"
+    }
+
+@app.post("/api/demo/create-sample-data")
+def create_sample_data(current_user: dict = Depends(require_admin)):
+    """Create sample project, workers, and daily log for testing"""
+    
+    # Create sample project
+    sample_project = {
+        "name": "Downtown Tower Phase 2",
+        "location": "New York, NY",
+        "address": "123 Main Street, New York, NY 10001",
+        "latitude": 40.7128,
+        "longitude": -74.0060,
+        "email_distribution": ["reports@example.com"],
+        "qr_code": "DTT-2025",
+        "geofence_radius": 100,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+        "created_by": current_user["id"],
+        "dropbox_folder": None,
+        "dropbox_token": None
+    }
+    
+    # Check if project exists
+    existing_project = projects_collection.find_one({"name": sample_project["name"]})
+    if existing_project:
+        project_id = str(existing_project["_id"])
+    else:
+        result = projects_collection.insert_one(sample_project)
+        project_id = str(result.inserted_id)
+    
+    # Create sample workers
+    sample_workers_data = [
+        {"name": "John Rodriguez", "trade": "Electrician", "company": "ABC Electric", "osha_number": "OSH-12345"},
+        {"name": "Mike Chen", "trade": "Carpenter", "company": "Pro Framing LLC", "osha_number": "OSH-23456"},
+        {"name": "Sarah Johnson", "trade": "Plumber", "company": "City Plumbing", "osha_number": "OSH-34567"},
+        {"name": "Carlos Martinez", "trade": "HVAC Tech", "company": "Cool Air Systems", "osha_number": "OSH-45678"},
+    ]
+    
+    created_workers = []
+    for w in sample_workers_data:
+        existing = workers_collection.find_one({"name": w["name"], "company": w["company"]})
+        if not existing:
+            w["created_at"] = datetime.utcnow()
+            w["updated_at"] = datetime.utcnow()
+            w["signature"] = None
+            w["id_photo"] = None
+            w["osha_card_photo"] = None
+            w["user_id"] = None
+            result = workers_collection.insert_one(w)
+            created_workers.append(str(result.inserted_id))
+        else:
+            created_workers.append(str(existing["_id"]))
+    
+    # Create sample daily log
+    today = date.today().isoformat()
+    existing_log = daily_logs_collection.find_one({"project_id": project_id, "log_date": today})
+    
+    if not existing_log:
+        sample_log = {
+            "project_id": project_id,
+            "log_date": today,
+            "weather_conditions": "Partly Cloudy",
+            "temperature": 72,
+            "subcontractor_cards": [
+                {
+                    "company_name": "ABC Electric",
+                    "worker_count": 2,
+                    "work_description": "Completed rough-in wiring for floors 12-14",
+                    "photos": [],
+                    "inspection": {"cleanliness": "pass", "safety": "pass", "comments": None}
+                },
+                {
+                    "company_name": "Pro Framing LLC",
+                    "worker_count": 3,
+                    "work_description": "Framing completed for units 1201-1208",
+                    "photos": [],
+                    "inspection": {"cleanliness": "pass", "safety": "pass", "comments": None}
+                }
+            ],
+            "conditional_checklists": None,
+            "notes": "Safety meeting held. No incidents reported.",
+            "status": "submitted",
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+            "created_by": current_user["id"]
+        }
+        daily_logs_collection.insert_one(sample_log)
+    
+    return {
+        "message": "Sample data created successfully",
+        "project_id": project_id,
+        "workers_created": len(created_workers),
+        "daily_log_created": not bool(existing_log)
+    }
+
 # ============== SETUP ==============
 
 @app.post("/api/setup/init-admin")
