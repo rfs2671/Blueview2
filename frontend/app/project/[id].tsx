@@ -144,6 +144,36 @@ export default function ProjectDetailScreen() {
             </View>
             <Text style={styles.actionTitle}>Daily Log</Text>
           </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionCard}
+            onPress={() => {
+              if (Platform.OS !== 'web') {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              }
+              router.push(`/project/${project.id}/report-settings`);
+            }}
+          >
+            <View style={[styles.actionIcon, { backgroundColor: '#9C27B0' + '20' }]}>
+              <Ionicons name="settings" size={24} color="#9C27B0" />
+            </View>
+            <Text style={styles.actionTitle}>Report Settings</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionCard}
+            onPress={() => {
+              if (Platform.OS !== 'web') {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              }
+              router.push(`/nfc?tag=demo-${project.id}`);
+            }}
+          >
+            <View style={[styles.actionIcon, { backgroundColor: COLORS.secondary + '20' }]}>
+              <Ionicons name="wifi" size={24} color={COLORS.secondary} />
+            </View>
+            <Text style={styles.actionTitle}>NFC Check-In</Text>
+          </TouchableOpacity>
         </View>
 
         {/* On-Site Workers */}
