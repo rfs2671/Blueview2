@@ -279,6 +279,86 @@ class DailyLogUpdate(BaseModel):
     conditional_checklists: Optional[ConditionalChecklist] = None
     notes: Optional[str] = None
 
+# ============== NEW MODELS FOR RBAC & COMPLIANCE ==============
+
+class SubcontractorCreate(BaseModel):
+    """Subcontractor account created by Admin"""
+    email: str
+    password: str
+    company_name: str
+    contact_name: str
+    phone: str
+    trade: str
+    assigned_projects: List[str] = []
+
+class SubcontractorUpdate(BaseModel):
+    company_name: Optional[str] = None
+    contact_name: Optional[str] = None
+    phone: Optional[str] = None
+    trade: Optional[str] = None
+    assigned_projects: Optional[List[str]] = None
+
+class WorkerPhoneCreate(BaseModel):
+    """Worker phone added by Subcontractor for SMS check-in"""
+    name: str
+    phone: str
+    trade: str
+    osha_30_number: Optional[str] = None
+    osha_30_expiry: Optional[str] = None  # ISO date
+    sst_number: Optional[str] = None
+    sst_expiry: Optional[str] = None  # ISO date
+    id_photo: Optional[str] = None  # base64
+
+class MaterialRequestCreate(BaseModel):
+    """Material request submitted by Subcontractor"""
+    project_id: str
+    items: List[dict]  # [{name, quantity, unit, notes}]
+    priority: str = "normal"  # low, normal, high, urgent
+    needed_by: Optional[str] = None  # ISO date
+    notes: Optional[str] = None
+
+class MaterialRequestUpdate(BaseModel):
+    status: Optional[str] = None  # pending, approved, ordered, delivered, rejected
+    admin_notes: Optional[str] = None
+    items: Optional[List[dict]] = None
+
+class GeofenceConfig(BaseModel):
+    """Geofence configuration for a project"""
+    latitude: float
+    longitude: float
+    radius: int = 100  # meters
+    active: bool = True
+
+class SMSCheckInRequest(BaseModel):
+    """Fast login via SMS link"""
+    token: str
+    latitude: float
+    longitude: float
+
+class VirtualPassportCreate(BaseModel):
+    """Enhanced Virtual Passport with DOB compliance fields"""
+    full_name: str
+    phone: str
+    id_photo: str  # base64
+    osha_30_number: str
+    osha_30_expiry: str  # ISO date
+    sst_number: Optional[str] = None
+    sst_expiry: Optional[str] = None
+    trade: str
+    company: str
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    signature: Optional[str] = None  # base64
+
+class DOBDailyLogEntry(BaseModel):
+    """NYC DOB Daily Log entry for a worker"""
+    worker_id: str
+    check_in_time: str
+    check_out_time: Optional[str] = None
+    gps_lat: float
+    gps_lng: float
+    signature_confirmed: bool = False
+
 # ============== HEALTH CHECK ==============
 
 @app.get("/api/health")
