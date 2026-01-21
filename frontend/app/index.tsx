@@ -316,6 +316,28 @@ export default function HomeScreen() {
           />
         )}
 
+        {/* Admin-only: Subcontractors */}
+        {user?.role === 'admin' && (
+          <QuickActionCard
+            icon="people-circle"
+            title="Subcontractors"
+            subtitle="Manage subcontractor accounts"
+            color="#E91E63"
+            onPress={() => handleNavigation('/admin/subcontractors')}
+          />
+        )}
+
+        {/* Admin & Subcontractor: Material Requests */}
+        {(user?.role === 'admin' || user?.role === 'subcontractor') && (
+          <QuickActionCard
+            icon="cube"
+            title="Material Requests"
+            subtitle={user?.role === 'admin' ? "View all requests" : "Submit material requests"}
+            color="#00BCD4"
+            onPress={() => handleNavigation('/materials')}
+          />
+        )}
+
         {/* Worker: My Passport */}
         {user?.role === 'worker' && user?.has_passport && (
           <QuickActionCard
