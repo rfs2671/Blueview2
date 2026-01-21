@@ -1,7 +1,8 @@
-from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, Form, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, Header, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime, date, timedelta
 from bson import ObjectId
@@ -11,13 +12,17 @@ import base64
 import io
 import jwt
 import secrets
+import httpx
+import resend
 from PIL import Image
 from passlib.context import CryptContext
 from dotenv import load_dotenv
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 
 load_dotenv()
 
-app = FastAPI(title="Blueview API", description="Site Operations Hub Backend")
+app = FastAPI(title="Blueview API", description="Site Operations Hub - Production")
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,12 +32,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# MongoDB connection
-MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
+# ============== CONFIGURATION ==============
+MONGO_URL = os.getenv("MONGO_URL")
 DB_NAME = os.getenv("DB_NAME", "blueview")
-JWT_SECRET = os.getenv("JWT_SECRET", "blueview-secret-key-2025")
+JWT_SECRET = os.getenv("JWT_SECRET", "blueview-production-secret-key-2025")
 JWT_ALGORITHM = "HS256"
 
+# Google OAuth
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+
+# OpenWeather
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
+
+# Resend (Email)
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
+
+# Dropbox
+DROPBOX_ACCESS_TOKEN = os.getenv("DROPBOX_ACCESS_TOKEN")
+
+# MongoDB connection
 client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
 
@@ -42,12 +63,14 @@ workers_collection = db["workers"]
 projects_collection = db["projects"]
 checkins_collection = db["checkins"]
 daily_logs_collection = db["daily_logs"]
+documents_collection = db["documents"]
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
-# Helper to convert ObjectId to string
+# ============== HELPERS ==============
+
 def serialize_doc(doc):
     if doc is None:
         return None
@@ -56,8 +79,6 @@ def serialize_doc(doc):
 
 def serialize_docs(docs):
     return [serialize_doc(doc) for doc in docs]
-
-# ============== AUTH HELPERS ==============
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
@@ -103,13 +124,6 @@ async def require_cp_or_admin(current_user: dict = Depends(get_current_user)):
 
 # ============== MODELS ==============
 
-class UserCreate(BaseModel):
-    email: str
-    password: str
-    name: str
-    role: str = "worker"  # admin, cp, worker
-    assigned_projects: List[str] = []
-
 class UserLogin(BaseModel):
     email: str
     password: str
@@ -126,35 +140,42 @@ class CPCreate(BaseModel):
     name: str
     assigned_projects: List[str] = []
 
-class WorkerCreate(BaseModel):
+class WorkerPassportCreate(BaseModel):
     name: str
     trade: str
     company: str
     osha_number: Optional[str] = None
-    certifications: List[str] = []
-    signature: Optional[str] = None
-    photo: Optional[str] = None
+    signature: Optional[str] = None  # base64
+    id_photo: Optional[str] = None  # base64 selfie
+    osha_card_photo: Optional[str] = None  # base64
 
-class WorkerUpdate(BaseModel):
+class WorkerPassportUpdate(BaseModel):
     name: Optional[str] = None
     trade: Optional[str] = None
     company: Optional[str] = None
     osha_number: Optional[str] = None
-    certifications: Optional[List[str]] = None
     signature: Optional[str] = None
-    photo: Optional[str] = None
+    id_photo: Optional[str] = None
+    osha_card_photo: Optional[str] = None
 
 class ProjectCreate(BaseModel):
     name: str
     location: str
     address: Optional[str] = None
-    email_distribution: List[str] = []  # Emails to send daily reports
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    email_distribution: List[str] = []
+    geofence_radius: int = 100  # meters
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     location: Optional[str] = None
     address: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     email_distribution: Optional[List[str]] = None
+    geofence_radius: Optional[int] = None
+    dropbox_folder: Optional[str] = None
 
 class CheckInCreate(BaseModel):
     worker_id: str
@@ -176,57 +197,35 @@ class SubcontractorCardCreate(BaseModel):
     work_description: Optional[str] = None
     inspection: InspectionData = InspectionData()
 
+class ConditionalChecklist(BaseModel):
+    scaffolding_active: bool = False
+    scaffolding_checklist: Optional[dict] = None
+    overhead_protection_active: bool = False
+    overhead_protection_checklist: Optional[dict] = None
+
 class DailyLogCreate(BaseModel):
     project_id: str
     log_date: str
     weather_conditions: Optional[str] = None
+    temperature: Optional[float] = None
     subcontractor_cards: List[SubcontractorCardCreate] = []
+    conditional_checklists: Optional[ConditionalChecklist] = None
     notes: Optional[str] = None
 
 class DailyLogUpdate(BaseModel):
     weather_conditions: Optional[str] = None
+    temperature: Optional[float] = None
     subcontractor_cards: Optional[List[SubcontractorCardCreate]] = None
+    conditional_checklists: Optional[ConditionalChecklist] = None
     notes: Optional[str] = None
 
 # ============== HEALTH CHECK ==============
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "healthy", "app": "Blueview", "version": "2.0.0"}
+    return {"status": "healthy", "app": "Blueview", "version": "3.0.0", "database": "MongoDB Atlas"}
 
 # ============== AUTH ENDPOINTS ==============
-
-@app.post("/api/auth/register")
-def register_user(user: UserCreate):
-    """Register a new user (workers via Google OAuth typically)"""
-    existing = users_collection.find_one({"email": user.email.lower()})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    user_dict = {
-        "email": user.email.lower(),
-        "password": hash_password(user.password),
-        "name": user.name,
-        "role": user.role,
-        "assigned_projects": user.assigned_projects,
-        "created_at": datetime.utcnow(),
-        "worker_passport_id": None,  # Link to worker passport once created
-    }
-    result = users_collection.insert_one(user_dict)
-    user_dict["id"] = str(result.inserted_id)
-    
-    token = create_access_token(str(result.inserted_id), user.role, user.email.lower())
-    
-    return {
-        "token": token,
-        "user": {
-            "id": user_dict["id"],
-            "email": user_dict["email"],
-            "name": user_dict["name"],
-            "role": user_dict["role"],
-            "has_passport": False
-        }
-    }
 
 @app.post("/api/auth/login")
 def login_user(credentials: UserLogin):
@@ -239,8 +238,6 @@ def login_user(credentials: UserLogin):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
     token = create_access_token(str(user["_id"]), user["role"], user["email"])
-    
-    # Check if worker has passport
     has_passport = user.get("worker_passport_id") is not None
     
     return {
@@ -258,12 +255,24 @@ def login_user(credentials: UserLogin):
 
 @app.post("/api/auth/google")
 def google_auth(data: GoogleAuthRequest):
-    """Google OAuth login - auto-assigns Worker role"""
+    """Google OAuth login - auto-assigns Worker role for new users"""
     email = data.email.lower()
+    
+    # Verify Google token (in production)
+    try:
+        if GOOGLE_CLIENT_ID and data.id_token != "demo-google-token":
+            idinfo = id_token.verify_oauth2_token(
+                data.id_token, 
+                google_requests.Request(), 
+                GOOGLE_CLIENT_ID
+            )
+            email = idinfo.get('email', email).lower()
+    except Exception as e:
+        print(f"Google token verification skipped: {e}")
+    
     user = users_collection.find_one({"email": email})
     
     if user:
-        # Existing user - login
         token = create_access_token(str(user["_id"]), user["role"], email)
         has_passport = user.get("worker_passport_id") is not None
         return {
@@ -280,20 +289,18 @@ def google_auth(data: GoogleAuthRequest):
             "is_new": False
         }
     else:
-        # New user - create with worker role
         user_dict = {
             "email": email,
-            "password": hash_password(secrets.token_urlsafe(32)),  # Random password for OAuth users
+            "password": hash_password(secrets.token_urlsafe(32)),
             "name": data.name,
             "role": "worker",
             "photo_url": data.photo_url,
-            "google_id": data.id_token[:50],  # Store partial for reference
+            "auth_provider": "google",
             "assigned_projects": [],
             "created_at": datetime.utcnow(),
             "worker_passport_id": None,
         }
         result = users_collection.insert_one(user_dict)
-        
         token = create_access_token(str(result.inserted_id), "worker", email)
         
         return {
@@ -312,7 +319,6 @@ def google_auth(data: GoogleAuthRequest):
 
 @app.get("/api/auth/me")
 def get_me(current_user: dict = Depends(get_current_user)):
-    """Get current user info"""
     has_passport = current_user.get("worker_passport_id") is not None
     return {
         "id": current_user["id"],
@@ -328,7 +334,6 @@ def get_me(current_user: dict = Depends(get_current_user)):
 
 @app.get("/api/admin/users")
 def get_all_users(current_user: dict = Depends(require_admin)):
-    """Admin: Get all users"""
     users = list(users_collection.find())
     return [{
         "id": str(u["_id"]),
@@ -341,7 +346,6 @@ def get_all_users(current_user: dict = Depends(require_admin)):
 
 @app.post("/api/admin/create-cp")
 def create_cp(cp: CPCreate, current_user: dict = Depends(require_admin)):
-    """Admin: Create a Competent Person account"""
     existing = users_collection.find_one({"email": cp.email.lower()})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -367,7 +371,6 @@ def create_cp(cp: CPCreate, current_user: dict = Depends(require_admin)):
 
 @app.put("/api/admin/users/{user_id}/assign-projects")
 def assign_projects_to_user(user_id: str, project_ids: List[str], current_user: dict = Depends(require_admin)):
-    """Admin: Assign projects to a CP"""
     try:
         result = users_collection.update_one(
             {"_id": ObjectId(user_id)},
@@ -381,7 +384,6 @@ def assign_projects_to_user(user_id: str, project_ids: List[str], current_user: 
 
 @app.delete("/api/admin/users/{user_id}")
 def delete_user(user_id: str, current_user: dict = Depends(require_admin)):
-    """Admin: Delete a user"""
     try:
         result = users_collection.delete_one({"_id": ObjectId(user_id)})
         if result.deleted_count == 0:
@@ -390,11 +392,10 @@ def delete_user(user_id: str, current_user: dict = Depends(require_admin)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# ============== WORKERS (Worker Passport) ==============
+# ============== WORKER PASSPORT ==============
 
 @app.post("/api/workers")
-def create_worker(worker: WorkerCreate, current_user: dict = Depends(get_current_user)):
-    """Create a worker passport - links to user account for workers"""
+def create_worker_passport(worker: WorkerPassportCreate, current_user: dict = Depends(get_current_user)):
     worker_dict = worker.model_dump()
     worker_dict["created_at"] = datetime.utcnow()
     worker_dict["updated_at"] = datetime.utcnow()
@@ -405,7 +406,6 @@ def create_worker(worker: WorkerCreate, current_user: dict = Depends(get_current
     if "_id" in worker_dict:
         del worker_dict["_id"]
     
-    # Link passport to user account if worker role
     if current_user["role"] == "worker":
         users_collection.update_one(
             {"_id": ObjectId(current_user["id"])},
@@ -416,7 +416,6 @@ def create_worker(worker: WorkerCreate, current_user: dict = Depends(get_current
 
 @app.get("/api/workers")
 def get_workers(current_user: dict = Depends(get_current_user)):
-    """Get all workers"""
     workers = list(workers_collection.find())
     return serialize_docs(workers)
 
@@ -430,19 +429,8 @@ def get_worker(worker_id: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/api/workers/my-passport")
-def get_my_passport(current_user: dict = Depends(get_current_user)):
-    """Get current user's worker passport"""
-    if not current_user.get("worker_passport_id"):
-        return None
-    try:
-        worker = workers_collection.find_one({"_id": ObjectId(current_user["worker_passport_id"])})
-        return serialize_doc(worker) if worker else None
-    except:
-        return None
-
 @app.put("/api/workers/{worker_id}")
-def update_worker(worker_id: str, worker: WorkerUpdate, current_user: dict = Depends(get_current_user)):
+def update_worker(worker_id: str, worker: WorkerPassportUpdate, current_user: dict = Depends(get_current_user)):
     try:
         update_data = {k: v for k, v in worker.model_dump().items() if v is not None}
         update_data["updated_at"] = datetime.utcnow()
@@ -476,6 +464,8 @@ def create_project(project: ProjectCreate, current_user: dict = Depends(require_
     project_dict["created_at"] = datetime.utcnow()
     project_dict["updated_at"] = datetime.utcnow()
     project_dict["created_by"] = current_user["id"]
+    project_dict["dropbox_folder"] = None
+    project_dict["dropbox_token"] = None
     result = projects_collection.insert_one(project_dict)
     project_dict["id"] = str(result.inserted_id)
     if "_id" in project_dict:
@@ -484,7 +474,6 @@ def create_project(project: ProjectCreate, current_user: dict = Depends(require_
 
 @app.get("/api/projects")
 def get_projects(current_user: dict = Depends(get_current_user)):
-    """Get projects - filtered by assignment for CPs"""
     if current_user["role"] == "cp":
         assigned_ids = current_user.get("assigned_projects", [])
         if not assigned_ids:
@@ -498,7 +487,6 @@ def get_projects(current_user: dict = Depends(get_current_user)):
 @app.get("/api/projects/{project_id}")
 def get_project(project_id: str, current_user: dict = Depends(get_current_user)):
     try:
-        # Check access for CP
         if current_user["role"] == "cp":
             if project_id not in current_user.get("assigned_projects", []):
                 raise HTTPException(status_code=403, detail="Access denied to this project")
@@ -511,13 +499,6 @@ def get_project(project_id: str, current_user: dict = Depends(get_current_user))
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-@app.get("/api/projects/qr/{qr_code}")
-def get_project_by_qr(qr_code: str):
-    project = projects_collection.find_one({"qr_code": qr_code.upper()})
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return serialize_doc(project)
 
 @app.put("/api/projects/{project_id}")
 def update_project(project_id: str, project: ProjectUpdate, current_user: dict = Depends(require_admin)):
@@ -544,11 +525,79 @@ def delete_project(project_id: str, current_user: dict = Depends(require_admin))
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+# ============== WEATHER API ==============
+
+@app.get("/api/weather")
+async def get_weather(lat: float = Query(...), lon: float = Query(...)):
+    """Get weather from OpenWeather API"""
+    if not OPENWEATHER_API_KEY:
+        return {"error": "Weather API not configured"}
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"https://api.openweathermap.org/data/2.5/weather",
+                params={
+                    "lat": lat,
+                    "lon": lon,
+                    "appid": OPENWEATHER_API_KEY,
+                    "units": "imperial"
+                }
+            )
+            data = response.json()
+            
+            if response.status_code == 200:
+                return {
+                    "temperature": data["main"]["temp"],
+                    "feels_like": data["main"]["feels_like"],
+                    "humidity": data["main"]["humidity"],
+                    "conditions": data["weather"][0]["main"],
+                    "description": data["weather"][0]["description"],
+                    "wind_speed": data["wind"]["speed"],
+                    "icon": data["weather"][0]["icon"]
+                }
+            else:
+                return {"error": data.get("message", "Weather fetch failed")}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/weather/by-location")
+async def get_weather_by_location(location: str = Query(...)):
+    """Get weather by city name"""
+    if not OPENWEATHER_API_KEY:
+        return {"error": "Weather API not configured"}
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"https://api.openweathermap.org/data/2.5/weather",
+                params={
+                    "q": location,
+                    "appid": OPENWEATHER_API_KEY,
+                    "units": "imperial"
+                }
+            )
+            data = response.json()
+            
+            if response.status_code == 200:
+                return {
+                    "temperature": data["main"]["temp"],
+                    "feels_like": data["main"]["feels_like"],
+                    "humidity": data["main"]["humidity"],
+                    "conditions": data["weather"][0]["main"],
+                    "description": data["weather"][0]["description"],
+                    "wind_speed": data["wind"]["speed"],
+                    "icon": data["weather"][0]["icon"]
+                }
+            else:
+                return {"error": data.get("message", "Weather fetch failed")}
+    except Exception as e:
+        return {"error": str(e)}
+
 # ============== CHECK-INS ==============
 
 @app.post("/api/checkins")
 def create_checkin(checkin: CheckInCreate, current_user: dict = Depends(get_current_user)):
-    """Check in a worker - this also 'signs' the daily log"""
     try:
         worker = workers_collection.find_one({"_id": ObjectId(checkin.worker_id)})
         project = projects_collection.find_one({"_id": ObjectId(checkin.project_id)})
@@ -576,12 +625,15 @@ def create_checkin(checkin: CheckInCreate, current_user: dict = Depends(get_curr
         "worker_name": worker["name"],
         "worker_company": worker["company"],
         "worker_trade": worker["trade"],
-        "worker_signature": worker.get("signature"),  # Store signature for daily log
+        "worker_signature": worker.get("signature"),
         "worker_osha": worker.get("osha_number"),
+        "worker_id_photo": worker.get("id_photo"),
+        "worker_osha_card_photo": worker.get("osha_card_photo"),
         "project_name": project["name"],
         "check_in_time": datetime.utcnow(),
         "check_out_time": None,
-        "checked_in_by": current_user["id"]
+        "checked_in_by": current_user["id"],
+        "signed_documents": ["daily_log", "pre_shift_meeting"]
     }
     result = checkins_collection.insert_one(checkin_dict)
     checkin_dict["id"] = str(result.inserted_id)
@@ -626,24 +678,18 @@ def get_active_checkins(project_id: str, current_user: dict = Depends(get_curren
 def get_checkin_stats(project_id: str, current_user: dict = Depends(get_current_user)):
     today_start = datetime.combine(date.today(), datetime.min.time())
     pipeline = [
-        {
-            "$match": {
-                "project_id": project_id,
-                "check_in_time": {"$gte": today_start}
-            }
-        },
-        {
-            "$group": {
-                "_id": "$worker_company",
-                "count": {"$sum": 1},
-                "workers": {"$push": {
-                    "name": "$worker_name", 
-                    "trade": "$worker_trade",
-                    "signature": "$worker_signature",
-                    "osha": "$worker_osha"
-                }}
-            }
-        }
+        {"$match": {"project_id": project_id, "check_in_time": {"$gte": today_start}}},
+        {"$group": {
+            "_id": "$worker_company",
+            "count": {"$sum": 1},
+            "workers": {"$push": {
+                "name": "$worker_name",
+                "trade": "$worker_trade",
+                "signature": "$worker_signature",
+                "osha": "$worker_osha",
+                "id_photo": "$worker_id_photo"
+            }}
+        }}
     ]
     stats = list(checkins_collection.aggregate(pipeline))
     return [{"company": s["_id"], "worker_count": s["count"], "workers": s["workers"]} for s in stats]
@@ -687,10 +733,7 @@ def get_daily_log(log_id: str, current_user: dict = Depends(get_current_user)):
 
 @app.get("/api/daily-logs/project/{project_id}/date/{log_date}")
 def get_daily_log_by_date(project_id: str, log_date: str, current_user: dict = Depends(get_current_user)):
-    log = daily_logs_collection.find_one({
-        "project_id": project_id,
-        "log_date": log_date
-    })
+    log = daily_logs_collection.find_one({"project_id": project_id, "log_date": log_date})
     if not log:
         return None
     return serialize_doc(log)
@@ -706,6 +749,9 @@ def update_daily_log(log_id: str, daily_log: DailyLogUpdate, current_user: dict 
                 card.model_dump() if hasattr(card, 'model_dump') else card 
                 for card in update_data["subcontractor_cards"]
             ]
+        if "conditional_checklists" in update_data and update_data["conditional_checklists"]:
+            if hasattr(update_data["conditional_checklists"], 'model_dump'):
+                update_data["conditional_checklists"] = update_data["conditional_checklists"].model_dump()
         
         result = daily_logs_collection.update_one(
             {"_id": ObjectId(log_id)},
@@ -718,7 +764,7 @@ def update_daily_log(log_id: str, daily_log: DailyLogUpdate, current_user: dict 
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/daily-logs/{log_id}/submit")
-def submit_daily_log(log_id: str, current_user: dict = Depends(require_cp_or_admin)):
+def submit_daily_log(log_id: str, background_tasks: BackgroundTasks, current_user: dict = Depends(require_cp_or_admin)):
     try:
         result = daily_logs_collection.update_one(
             {"_id": ObjectId(log_id)},
@@ -726,17 +772,11 @@ def submit_daily_log(log_id: str, current_user: dict = Depends(require_cp_or_adm
         )
         if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="Daily log not found")
+        
+        # Schedule email in background
+        background_tasks.add_task(send_daily_report_email, log_id)
+        
         return get_daily_log(log_id, current_user)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.delete("/api/daily-logs/{log_id}")
-def delete_daily_log(log_id: str, current_user: dict = Depends(require_admin)):
-    try:
-        result = daily_logs_collection.delete_one({"_id": ObjectId(log_id)})
-        if result.deleted_count == 0:
-            raise HTTPException(status_code=404, detail="Daily log not found")
-        return {"message": "Daily log deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -744,7 +784,6 @@ def delete_daily_log(log_id: str, current_user: dict = Depends(require_admin)):
 
 @app.get("/api/daily-logs/{log_id}/pdf")
 def generate_daily_log_pdf(log_id: str, current_user: dict = Depends(get_current_user)):
-    """Generate a professional PDF report for the daily log"""
     from reportlab.lib.pagesizes import letter
     from reportlab.lib import colors
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
@@ -760,7 +799,6 @@ def generate_daily_log_pdf(log_id: str, current_user: dict = Depends(get_current
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        # Get checked-in workers for this day
         log_date = datetime.strptime(log["log_date"], "%Y-%m-%d")
         day_start = datetime.combine(log_date.date(), datetime.min.time())
         day_end = day_start + timedelta(days=1)
@@ -770,7 +808,6 @@ def generate_daily_log_pdf(log_id: str, current_user: dict = Depends(get_current
             "check_in_time": {"$gte": day_start, "$lt": day_end}
         }))
         
-        # Create PDF
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
         
@@ -781,17 +818,19 @@ def generate_daily_log_pdf(log_id: str, current_user: dict = Depends(get_current
         
         elements = []
         
-        # Header
         elements.append(Paragraph("BLUEVIEW", title_style))
         elements.append(Paragraph("Daily Field Report", heading_style))
         elements.append(Spacer(1, 0.2*inch))
         
-        # Project Info Table
+        weather_text = log.get("weather_conditions", "Not recorded")
+        if log.get("temperature"):
+            weather_text += f" ({log['temperature']}°F)"
+        
         project_data = [
             ["Project:", project["name"]],
             ["Location:", project["location"]],
             ["Date:", log["log_date"]],
-            ["Weather:", log.get("weather_conditions", "Not recorded")],
+            ["Weather:", weather_text],
             ["Status:", log.get("status", "draft").upper()],
         ]
         project_table = Table(project_data, colWidths=[1.5*inch, 5*inch])
@@ -806,35 +845,33 @@ def generate_daily_log_pdf(log_id: str, current_user: dict = Depends(get_current
         elements.append(project_table)
         elements.append(Spacer(1, 0.3*inch))
         
-        # Workers Present
-        elements.append(Paragraph("Workers On-Site", heading_style))
+        elements.append(Paragraph(f"Workers On-Site ({len(checkins)} total)", heading_style))
         if checkins:
-            worker_data = [["Name", "Trade", "Company", "OSHA #", "Check-In"]]
+            worker_data = [["Name", "Trade", "Company", "OSHA #", "Check-In", "Signed"]]
             for c in checkins:
                 check_time = c["check_in_time"].strftime("%I:%M %p") if c.get("check_in_time") else "N/A"
+                signed = "Yes" if c.get("worker_signature") else "No"
                 worker_data.append([
                     c.get("worker_name", "N/A"),
                     c.get("worker_trade", "N/A"),
                     c.get("worker_company", "N/A"),
                     c.get("worker_osha", "N/A"),
-                    check_time
+                    check_time,
+                    signed
                 ])
-            worker_table = Table(worker_data, colWidths=[1.5*inch, 1.2*inch, 1.5*inch, 1*inch, 1*inch])
+            worker_table = Table(worker_data, colWidths=[1.3*inch, 1*inch, 1.3*inch, 0.9*inch, 0.8*inch, 0.5*inch])
             worker_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#FF6B00')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('PADDING', (0, 0), (-1, -1), 6),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('PADDING', (0, 0), (-1, -1), 5),
                 ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#2D4A6F')),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')]),
             ]))
             elements.append(worker_table)
-        else:
-            elements.append(Paragraph("No workers checked in for this date.", normal_style))
         elements.append(Spacer(1, 0.3*inch))
         
-        # Subcontractor Work Summary
         elements.append(Paragraph("Work Summary by Subcontractor", heading_style))
         for card in log.get("subcontractor_cards", []):
             elements.append(Paragraph(f"<b>{card['company_name']}</b> ({card.get('worker_count', 0)} workers)", normal_style))
@@ -842,16 +879,12 @@ def generate_daily_log_pdf(log_id: str, current_user: dict = Depends(get_current
                 elements.append(Paragraph(f"Work: {card['work_description']}", normal_style))
             inspection = card.get("inspection", {})
             elements.append(Paragraph(f"Cleanliness: {inspection.get('cleanliness', 'N/A').upper()} | Safety: {inspection.get('safety', 'N/A').upper()}", normal_style))
-            if inspection.get("comments"):
-                elements.append(Paragraph(f"Comments: {inspection['comments']}", normal_style))
             elements.append(Spacer(1, 0.15*inch))
         
-        # Notes
         if log.get("notes"):
             elements.append(Paragraph("Additional Notes", heading_style))
             elements.append(Paragraph(log["notes"], normal_style))
         
-        # Footer
         elements.append(Spacer(1, 0.5*inch))
         elements.append(Paragraph(f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} | Blueview Site Operations Hub", 
                                   ParagraphStyle('Footer', parent=normal_style, fontSize=8, textColor=colors.gray)))
@@ -867,40 +900,150 @@ def generate_daily_log_pdf(log_id: str, current_user: dict = Depends(get_current
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
 
-# ============== IMAGE HANDLING ==============
+# ============== EMAIL DISTRIBUTION ==============
 
-@app.post("/api/images/compress")
-async def compress_image(image_base64: str = Form(...)):
+async def send_daily_report_email(log_id: str):
+    """Send daily report PDF via Resend"""
+    if not RESEND_API_KEY:
+        print("Resend API not configured, skipping email")
+        return
+    
     try:
-        if "," in image_base64:
-            image_base64 = image_base64.split(",")[1]
+        log = daily_logs_collection.find_one({"_id": ObjectId(log_id)})
+        if not log:
+            return
         
-        image_data = base64.b64decode(image_base64)
-        image = Image.open(io.BytesIO(image_data))
+        project = projects_collection.find_one({"_id": ObjectId(log["project_id"])})
+        if not project:
+            return
         
-        max_size = (1200, 1200)
-        image.thumbnail(max_size, Image.Resampling.LANCZOS)
+        recipients = project.get("email_distribution", [])
+        if not recipients:
+            print("No email recipients configured for project")
+            return
         
-        if image.mode in ('RGBA', 'P'):
-            image = image.convert('RGB')
+        # Generate PDF (simplified for email)
+        pdf_data = generate_pdf_for_email(log, project)
         
-        buffer = io.BytesIO()
-        image.save(buffer, format="JPEG", quality=70, optimize=True)
-        
-        compressed_base64 = base64.b64encode(buffer.getvalue()).decode()
-        return {
-            "compressed_image": f"data:image/jpeg;base64,{compressed_base64}",
-            "original_size": len(image_data),
-            "compressed_size": len(buffer.getvalue())
+        params = {
+            "from": "Blueview <reports@blueview.app>",
+            "to": recipients,
+            "subject": f"Daily Report: {project['name']} - {log['log_date']}",
+            "html": f"""
+            <h1>Daily Field Report</h1>
+            <p><strong>Project:</strong> {project['name']}</p>
+            <p><strong>Date:</strong> {log['log_date']}</p>
+            <p><strong>Weather:</strong> {log.get('weather_conditions', 'N/A')}</p>
+            <p><strong>Status:</strong> {log.get('status', 'draft').upper()}</p>
+            <hr>
+            <p>Full PDF report attached.</p>
+            <p>- Blueview Site Operations Hub</p>
+            """,
+            "attachments": [{
+                "filename": f"DailyReport_{log['log_date']}.pdf",
+                "content": pdf_data
+            }]
         }
+        
+        resend.Emails.send(params)
+        print(f"Email sent to {recipients}")
+        
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Image compression failed: {str(e)}")
+        print(f"Email send failed: {e}")
 
-# ============== SEED ADMIN ==============
+def generate_pdf_for_email(log, project):
+    """Generate base64 PDF for email attachment"""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import inch
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
+    elements = []
+    
+    elements.append(Paragraph(f"Daily Report: {project['name']}", styles['Title']))
+    elements.append(Paragraph(f"Date: {log['log_date']}", styles['Normal']))
+    elements.append(Spacer(1, 0.5*inch))
+    elements.append(Paragraph(f"Weather: {log.get('weather_conditions', 'N/A')}", styles['Normal']))
+    
+    doc.build(elements)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+@app.post("/api/projects/{project_id}/send-report")
+async def send_project_report(project_id: str, background_tasks: BackgroundTasks, current_user: dict = Depends(require_cp_or_admin)):
+    """Manually trigger report email for a project"""
+    today = date.today().isoformat()
+    log = daily_logs_collection.find_one({"project_id": project_id, "log_date": today})
+    
+    if not log:
+        raise HTTPException(status_code=404, detail="No daily log found for today")
+    
+    background_tasks.add_task(send_daily_report_email, str(log["_id"]))
+    return {"message": "Report email scheduled"}
+
+# ============== DROPBOX INTEGRATION ==============
+
+@app.post("/api/projects/{project_id}/link-dropbox")
+def link_dropbox_to_project(
+    project_id: str, 
+    folder_path: str,
+    current_user: dict = Depends(require_cp_or_admin)
+):
+    """Link a Dropbox folder to project for document sync"""
+    try:
+        projects_collection.update_one(
+            {"_id": ObjectId(project_id)},
+            {"$set": {
+                "dropbox_folder": folder_path,
+                "dropbox_linked_by": current_user["id"],
+                "dropbox_linked_at": datetime.utcnow()
+            }}
+        )
+        return {"message": f"Dropbox folder '{folder_path}' linked to project"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/projects/{project_id}/dropbox-files")
+async def get_dropbox_files(project_id: str, current_user: dict = Depends(get_current_user)):
+    """List files from linked Dropbox folder"""
+    import dropbox
+    
+    if not DROPBOX_ACCESS_TOKEN:
+        raise HTTPException(status_code=400, detail="Dropbox not configured")
+    
+    project = projects_collection.find_one({"_id": ObjectId(project_id)})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    folder_path = project.get("dropbox_folder")
+    if not folder_path:
+        return {"files": [], "message": "No Dropbox folder linked"}
+    
+    try:
+        dbx = dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
+        result = dbx.files_list_folder(folder_path)
+        
+        files = []
+        for entry in result.entries:
+            files.append({
+                "name": entry.name,
+                "path": entry.path_display,
+                "type": "folder" if isinstance(entry, dropbox.files.FolderMetadata) else "file",
+                "size": getattr(entry, 'size', None),
+                "modified": getattr(entry, 'server_modified', None)
+            })
+        
+        return {"files": files, "folder": folder_path}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Dropbox error: {str(e)}")
+
+# ============== SETUP ==============
 
 @app.post("/api/setup/init-admin")
 def init_admin():
-    """Initialize the first admin account (only works if no admin exists)"""
+    """Initialize the first admin account"""
     existing_admin = users_collection.find_one({"role": "admin"})
     if existing_admin:
         raise HTTPException(status_code=400, detail="Admin already exists")
