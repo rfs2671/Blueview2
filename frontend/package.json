@@ -51,5 +51,15 @@
     "@types/react": "~19.1.10",
     "typescript": "~5.9.2"
   },
+  "resolutions": {
+    "expo-constants": "~18.0.13"
+  },
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": ["react-native-nfc-manager"]
+      }
+    }
+  },
   "private": true
 }
