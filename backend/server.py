@@ -2608,53 +2608,67 @@ class OSHACardOCRRequest(BaseModel):
     image_base64: str  # base64 encoded image
 
 @app.post("/api/passport/ocr-osha-card")
-async def ocr_osha_card(request: OSHACardOCRRequest):
-    """Extract info from OSHA card photo using AI vision"""
-    import asyncio
-    from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+def ocr_osha_card(request: OSHACardOCRRequest):
+    """Extract info from OSHA card photo using Claude Vision"""
+    import anthropic
+    import json
     
-    EMERGENT_LLM_KEY = os.getenv("EMERGENT_LLM_KEY")
-    if not EMERGENT_LLM_KEY:
+    CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
+    if not CLAUDE_API_KEY:
         raise HTTPException(status_code=500, detail="OCR service not configured")
     
     try:
-        # Initialize chat with Gemini for vision
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=f"osha-ocr-{secrets.token_hex(8)}",
-            system_message="""You are an expert at reading OSHA safety training cards. 
-Extract the following information from the card image and return ONLY a JSON object with these fields:
+        client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+        
+        # Determine image type (assume jpeg if not clear)
+        media_type = "image/jpeg"
+        if request.image_base64.startswith("/9j/"):
+            media_type = "image/jpeg"
+        elif request.image_base64.startswith("iVBOR"):
+            media_type = "image/png"
+        
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": request.image_base64,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": """You are an expert at reading OSHA safety training cards. 
+Extract the following information from this card image and return ONLY a JSON object with these fields:
 - name: Full name on the card
 - osha_number: The DOL card number or student ID
 - card_type: "10" for OSHA 10, "30" for OSHA 30, or "other"
 - expiry_date: Expiration date in YYYY-MM-DD format if visible, or null
 - issuing_org: The organization that issued the card
 
-Return ONLY valid JSON, no other text."""
-        ).with_model("gemini", "gemini-2.5-flash")
-        
-        # Create image content
-        image_content = ImageContent(image_base64=request.image_base64)
-        
-        # Send for OCR
-        user_message = UserMessage(
-            text="Please extract all information from this OSHA safety training card.",
-            file_contents=[image_content]
+Return ONLY valid JSON, no other text or explanation."""
+                        }
+                    ],
+                }
+            ],
         )
         
-        response = await chat.send_message(user_message)
+        response_text = message.content[0].text.strip()
         
-        # Parse JSON response
-        import json
         # Clean response - remove markdown code blocks if present
-        clean_response = response.strip()
-        if clean_response.startswith("```"):
-            clean_response = clean_response.split("```")[1]
-            if clean_response.startswith("json"):
-                clean_response = clean_response[4:]
-        clean_response = clean_response.strip()
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+        response_text = response_text.strip()
         
-        extracted_data = json.loads(clean_response)
+        extracted_data = json.loads(response_text)
         
         return {
             "success": True,
