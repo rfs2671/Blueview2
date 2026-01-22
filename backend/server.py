@@ -2609,42 +2609,28 @@ class OSHACardOCRRequest(BaseModel):
 
 @app.post("/api/passport/ocr-osha-card")
 def ocr_osha_card(request: OSHACardOCRRequest):
-    """Extract info from OSHA card photo using Claude Vision"""
-    import anthropic
+    """Extract info from OSHA card photo using Gemini Vision"""
+    import google.generativeai as genai
     import json
     
-    CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
-    if not CLAUDE_API_KEY:
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="OCR service not configured")
     
     try:
-        client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-2.0-flash')
         
-        # Determine image type (assume jpeg if not clear)
-        media_type = "image/jpeg"
-        if request.image_base64.startswith("/9j/"):
-            media_type = "image/jpeg"
-        elif request.image_base64.startswith("iVBOR"):
-            media_type = "image/png"
+        # Decode base64 image
+        image_data = base64.b64decode(request.image_base64)
         
-        message = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1024,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": request.image_base64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": """You are an expert at reading OSHA safety training cards. 
+        # Create image part for Gemini
+        image_part = {
+            "mime_type": "image/jpeg",
+            "data": image_data
+        }
+        
+        prompt = """You are an expert at reading OSHA safety training cards. 
 Extract the following information from this card image and return ONLY a JSON object with these fields:
 - name: Full name on the card
 - osha_number: The DOL card number or student ID
@@ -2653,13 +2639,9 @@ Extract the following information from this card image and return ONLY a JSON ob
 - issuing_org: The organization that issued the card
 
 Return ONLY valid JSON, no other text or explanation."""
-                        }
-                    ],
-                }
-            ],
-        )
-        
-        response_text = message.content[0].text.strip()
+
+        response = model.generate_content([prompt, image_part])
+        response_text = response.text.strip()
         
         # Clean response - remove markdown code blocks if present
         if response_text.startswith("```"):
