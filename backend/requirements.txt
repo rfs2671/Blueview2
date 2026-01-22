@@ -31,5 +31,5 @@ requests==2.32.5
 # Utilities
 python-dateutil==2.9.0.post0
 
-# LLM Integration (for OSHA card OCR)
-emergentintegrations==0.1.0
+# Claude AI (for OSHA card OCR)
+anthropic==0.76.0
