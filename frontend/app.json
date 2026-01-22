@@ -1,42 +1,55 @@
 {
   "expo": {
-    "name": "frontend",
-    "slug": "frontend",
+    "name": "Blueview",
+    "slug": "blueview",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
-    "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "scheme": "blueview",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": false,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.blueview.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Scan QR codes and take photos",
+        "NSLocationWhenInUseUsageDescription": "Verify your location at job sites",
+        "NFCReaderUsageDescription": "Check in at job sites via NFC tags"
+      }
     },
     "android": {
+      "package": "com.blueview.app",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000"
+        "backgroundColor": "#0A1929"
       },
-      "edgeToEdgeEnabled": true
+      "permissions": [
+        "android.permission.NFC",
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ]
     },
     "web": {
       "bundler": "metro",
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "output": "static"
     },
     "plugins": [
       "expo-router",
+      "expo-secure-store",
       [
-        "expo-splash-screen",
+        "react-native-nfc-manager",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#000"
+          "nfcPermission": "Check in at construction sites via NFC"
         }
       ]
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "blueview-construction"
+      },
+      "EXPO_PUBLIC_BACKEND_URL": ""
     }
   }
 }
