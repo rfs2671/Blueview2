@@ -389,10 +389,27 @@ class NFCTagCreate(BaseModel):
     location_description: str = ""
 
 class NFCCheckInRequest(BaseModel):
-    """Worker check-in via NFC tag"""
+    """Worker check-in via NFC tag - for returning workers"""
     tag_id: str
     worker_id: str
     signature: Optional[str] = None  # base64
+
+class WorkerPassportCreate(BaseModel):
+    """Create worker passport from OSHA card OCR"""
+    name: str
+    osha_number: str
+    osha_card_type: str = "10"  # "10" or "30"
+    osha_expiry_date: Optional[str] = None
+    trade: str = "General Labor"
+    company: str = ""
+    phone: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    osha_card_image: Optional[str] = None  # base64
+
+class NFCPassportCheckinRequest(BaseModel):
+    """Worker check-in with auto-passport recognition"""
+    tag_id: str
+    device_passport_id: str  # Worker passport ID stored on device
 
 class SafetyOrientationEntry(BaseModel):
     """Worker safety orientation sign-in"""
