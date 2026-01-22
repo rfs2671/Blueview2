@@ -2598,6 +2598,313 @@ def nfc_worker_checkout(checkin_id: str, signature: Optional[str] = None):
     
     return {"message": "Check-out successful"}
 
+# ============== WORKER PASSPORT SYSTEM ==============
+
+worker_passports_collection = db["worker_passports"]
+site_orientations_collection = db["site_orientations"]
+
+class OSHACardOCRRequest(BaseModel):
+    """Request to OCR an OSHA card image"""
+    image_base64: str  # base64 encoded image
+
+@app.post("/api/passport/ocr-osha-card")
+async def ocr_osha_card(request: OSHACardOCRRequest):
+    """Extract info from OSHA card photo using AI vision"""
+    import asyncio
+    from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+    
+    EMERGENT_LLM_KEY = os.getenv("EMERGENT_LLM_KEY")
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=500, detail="OCR service not configured")
+    
+    try:
+        # Initialize chat with Gemini for vision
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"osha-ocr-{secrets.token_hex(8)}",
+            system_message="""You are an expert at reading OSHA safety training cards. 
+Extract the following information from the card image and return ONLY a JSON object with these fields:
+- name: Full name on the card
+- osha_number: The DOL card number or student ID
+- card_type: "10" for OSHA 10, "30" for OSHA 30, or "other"
+- expiry_date: Expiration date in YYYY-MM-DD format if visible, or null
+- issuing_org: The organization that issued the card
+
+Return ONLY valid JSON, no other text."""
+        ).with_model("gemini", "gemini-2.5-flash")
+        
+        # Create image content
+        image_content = ImageContent(image_base64=request.image_base64)
+        
+        # Send for OCR
+        user_message = UserMessage(
+            text="Please extract all information from this OSHA safety training card.",
+            file_contents=[image_content]
+        )
+        
+        response = await chat.send_message(user_message)
+        
+        # Parse JSON response
+        import json
+        # Clean response - remove markdown code blocks if present
+        clean_response = response.strip()
+        if clean_response.startswith("```"):
+            clean_response = clean_response.split("```")[1]
+            if clean_response.startswith("json"):
+                clean_response = clean_response[4:]
+        clean_response = clean_response.strip()
+        
+        extracted_data = json.loads(clean_response)
+        
+        return {
+            "success": True,
+            "data": {
+                "name": extracted_data.get("name", ""),
+                "osha_number": extracted_data.get("osha_number", ""),
+                "card_type": extracted_data.get("card_type", "10"),
+                "expiry_date": extracted_data.get("expiry_date"),
+                "issuing_org": extracted_data.get("issuing_org", "")
+            }
+        }
+        
+    except json.JSONDecodeError:
+        return {
+            "success": False,
+            "error": "Could not parse card information",
+            "data": {"name": "", "osha_number": "", "card_type": "10", "expiry_date": None}
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "data": {"name": "", "osha_number": "", "card_type": "10", "expiry_date": None}
+        }
+
+@app.post("/api/passport/create")
+def create_worker_passport_new(passport: WorkerPassportCreate):
+    """Create a new worker passport (one-time registration)"""
+    # Check if passport already exists with this OSHA number
+    existing = worker_passports_collection.find_one({"osha_number": passport.osha_number})
+    if existing:
+        # Return existing passport
+        return {
+            "passport_id": str(existing["_id"]),
+            "message": "Passport already exists",
+            "is_new": False,
+            "passport": serialize_doc(existing)
+        }
+    
+    # Create new passport
+    passport_doc = {
+        "name": passport.name,
+        "osha_number": passport.osha_number,
+        "osha_card_type": passport.osha_card_type,
+        "osha_expiry_date": passport.osha_expiry_date,
+        "trade": passport.trade,
+        "company": passport.company,
+        "phone": passport.phone,
+        "emergency_contact": passport.emergency_contact,
+        "osha_card_image": passport.osha_card_image,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+        "is_active": True,
+        "sites_visited": [],  # Track which sites worker has done orientation for
+        "total_checkins": 0
+    }
+    
+    result = worker_passports_collection.insert_one(passport_doc)
+    passport_doc["_id"] = result.inserted_id
+    
+    return {
+        "passport_id": str(result.inserted_id),
+        "message": "Passport created successfully",
+        "is_new": True,
+        "passport": serialize_doc(passport_doc)
+    }
+
+@app.get("/api/passport/{passport_id}")
+def get_worker_passport(passport_id: str):
+    """Get worker passport by ID"""
+    try:
+        passport = worker_passports_collection.find_one({"_id": ObjectId(passport_id)})
+        if not passport:
+            raise HTTPException(status_code=404, detail="Passport not found")
+        return serialize_doc(passport)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Invalid passport ID")
+
+@app.get("/api/passport/by-osha/{osha_number}")
+def get_passport_by_osha(osha_number: str):
+    """Get worker passport by OSHA number"""
+    passport = worker_passports_collection.find_one({"osha_number": osha_number})
+    if not passport:
+        raise HTTPException(status_code=404, detail="Passport not found")
+    return serialize_doc(passport)
+
+@app.post("/api/passport/checkin")
+def passport_nfc_checkin(checkin: NFCPassportCheckinRequest):
+    """
+    Worker checks in using their stored passport - AUTO SIGNS ALL BOOKS
+    This is the main endpoint for returning workers
+    """
+    # Verify NFC tag
+    tag = nfc_tags_collection.find_one({"tag_id": checkin.tag_id, "is_active": True})
+    if not tag:
+        raise HTTPException(status_code=404, detail="Invalid NFC tag")
+    
+    project_id = tag["project_id"]
+    
+    # Get worker passport
+    try:
+        passport = worker_passports_collection.find_one({"_id": ObjectId(checkin.device_passport_id)})
+    except:
+        raise HTTPException(status_code=404, detail="Invalid passport ID")
+    
+    if not passport:
+        raise HTTPException(status_code=404, detail="Passport not found - please register")
+    
+    today = date.today().isoformat()
+    now = datetime.utcnow()
+    
+    # Check if already checked in today
+    existing_checkin = checkins_collection.find_one({
+        "passport_id": checkin.device_passport_id,
+        "project_id": project_id,
+        "date": today,
+        "check_out_time": None
+    })
+    
+    if existing_checkin:
+        return {
+            "success": True,
+            "already_checked_in": True,
+            "checkin_id": str(existing_checkin["_id"]),
+            "worker_name": passport.get("name"),
+            "check_in_time": existing_checkin["check_in_time"].isoformat(),
+            "message": f"Welcome back {passport.get('name')}! Already checked in today."
+        }
+    
+    # ========== AUTO-SIGN ALL 3 BOOKS ==========
+    
+    # 1. DAILY SIGN-IN SHEET (Main check-in record)
+    checkin_record = {
+        "passport_id": checkin.device_passport_id,
+        "worker_id": checkin.device_passport_id,  # For backwards compatibility
+        "worker_name": passport.get("name"),
+        "worker_trade": passport.get("trade"),
+        "worker_company": passport.get("company"),
+        "worker_osha_number": passport.get("osha_number"),
+        "project_id": project_id,
+        "nfc_tag_id": checkin.tag_id,
+        "check_in_time": now,
+        "check_out_time": None,
+        "check_in_method": "nfc_passport",
+        "date": today,
+        "auto_signed": True
+    }
+    
+    checkin_result = checkins_collection.insert_one(checkin_record)
+    
+    # 2. SAFETY MEETING / TOOLBOX TALK (Auto-sign for today)
+    # Find or create today's safety meeting for this project
+    safety_meeting = safety_meetings_collection.find_one({
+        "project_id": project_id,
+        "meeting_date": today
+    })
+    
+    safety_meeting_signed = False
+    if safety_meeting:
+        # Add worker to attendees if not already there
+        existing_attendee = any(
+            a.get("osha_number") == passport.get("osha_number") 
+            for a in safety_meeting.get("attendees", [])
+        )
+        if not existing_attendee:
+            safety_meetings_collection.update_one(
+                {"_id": safety_meeting["_id"]},
+                {"$push": {"attendees": {
+                    "worker_name": passport.get("name"),
+                    "osha_number": passport.get("osha_number"),
+                    "signature": "auto-signed",
+                    "signed_at": now.isoformat()
+                }}}
+            )
+            safety_meeting_signed = True
+    else:
+        # Create a placeholder safety meeting for today
+        safety_meetings_collection.insert_one({
+            "project_id": project_id,
+            "meeting_date": today,
+            "meeting_time": now.strftime("%H:%M"),
+            "auto_created": True,
+            "attendees": [{
+                "worker_name": passport.get("name"),
+                "osha_number": passport.get("osha_number"),
+                "signature": "auto-signed",
+                "signed_at": now.isoformat()
+            }]
+        })
+        safety_meeting_signed = True
+    
+    # 3. SITE ORIENTATION (First visit to this site only)
+    site_orientation_needed = project_id not in passport.get("sites_visited", [])
+    site_orientation_signed = False
+    
+    if site_orientation_needed:
+        # Record site orientation
+        site_orientations_collection.insert_one({
+            "passport_id": checkin.device_passport_id,
+            "worker_name": passport.get("name"),
+            "osha_number": passport.get("osha_number"),
+            "project_id": project_id,
+            "orientation_date": today,
+            "signed_at": now,
+            "signature": "auto-signed",
+            "acknowledged_items": [
+                "general_site_info",
+                "emergency_procedures", 
+                "ppe_requirements",
+                "fall_protection",
+                "incident_reporting"
+            ]
+        })
+        
+        # Mark site as visited in passport
+        worker_passports_collection.update_one(
+            {"_id": ObjectId(checkin.device_passport_id)},
+            {"$addToSet": {"sites_visited": project_id}}
+        )
+        site_orientation_signed = True
+    
+    # Update passport stats
+    worker_passports_collection.update_one(
+        {"_id": ObjectId(checkin.device_passport_id)},
+        {
+            "$inc": {"total_checkins": 1},
+            "$set": {"last_checkin": now, "last_project_id": project_id}
+        }
+    )
+    
+    # Get project name for response
+    project = projects_collection.find_one({"_id": ObjectId(project_id)})
+    project_name = project.get("name", "Job Site") if project else "Job Site"
+    
+    return {
+        "success": True,
+        "already_checked_in": False,
+        "checkin_id": str(checkin_result.inserted_id),
+        "worker_name": passport.get("name"),
+        "project_name": project_name,
+        "check_in_time": now.isoformat(),
+        "books_signed": {
+            "daily_signin": True,
+            "safety_meeting": safety_meeting_signed or (safety_meeting is not None),
+            "site_orientation": site_orientation_signed,
+            "first_visit": site_orientation_needed
+        },
+        "message": f"Welcome {passport.get('name')}! All books signed automatically."
+    }
+
 # ============== SAFETY MEETING ==============
 
 @app.post("/api/safety-meetings")
