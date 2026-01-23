@@ -1,23 +1,23 @@
 {
   "expo": {
-    "name": "Blueview",
-    "slug": "blueview",
+    "name": "Blueview Passport",
+    "slug": "blueview-passport",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "blueview",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.blueview.app",
+      "bundleIdentifier": "com.blueview.passport",
       "infoPlist": {
-        "NSCameraUsageDescription": "Scan QR codes and take photos",
+        "NSCameraUsageDescription": "Scan OSHA cards and take photos",
         "NSLocationWhenInUseUsageDescription": "Verify your location at job sites",
         "NFCReaderUsageDescription": "Check in at job sites via NFC tags"
       }
     },
     "android": {
-      "package": "com.blueview.app",
+      "package": "com.blueview.passport",
       "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#0A1929"
@@ -45,7 +45,7 @@
     },
     "extra": {
       "eas": {
-        "projectId": "blueview-construction"
+        "projectId": "blueview-passport"
       }
     }
   }
