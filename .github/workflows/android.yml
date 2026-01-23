@@ -26,6 +26,10 @@ jobs:
       - name: Install yarn
         run: npm install -g yarn
 
+      - name: Create .env file
+        run: |
+          echo "REACT_APP_BACKEND_URL=${{ secrets.BACKEND_URL }}" > ./frontend/.env
+
       - name: Install dependencies
         working-directory: ./frontend
         run: yarn install
@@ -49,9 +53,9 @@ jobs:
       - name: Fix MainApplication.kt
         working-directory: ./frontend
         run: |
-          mkdir -p android/app/src/main/java/com/rfs2671/frontend
-          cat > android/app/src/main/java/com/rfs2671/frontend/MainApplication.kt << 'EOF'
-          package com.rfs2671.frontend
+          mkdir -p android/app/src/main/java/com/blueview/passport
+          cat > android/app/src/main/java/com/blueview/passport/MainApplication.kt << 'KOTLIN'
+          package com.blueview.passport
 
           import android.app.Application
           import com.facebook.react.PackageList
@@ -61,7 +65,7 @@ jobs:
           import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
           import com.facebook.react.defaults.DefaultReactNativeHost
           import com.facebook.soloader.SoLoader
-          import com.rfs2671.frontend.BuildConfig
+          import com.blueview.passport.BuildConfig
           import expo.modules.ApplicationLifecycleDispatcher
           import expo.modules.ReactNativeHostWrapper
 
@@ -84,7 +88,7 @@ jobs:
               ApplicationLifecycleDispatcher.onApplicationCreate(this)
             }
           }
-          EOF
+          KOTLIN
 
       - name: Build APK with Gradle
         working-directory: ./frontend/android
