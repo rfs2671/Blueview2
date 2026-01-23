@@ -38,13 +38,21 @@ jobs:
         working-directory: ./frontend
         run: npx expo prebuild --platform android
 
+      - name: Enable New Architecture
+        working-directory: ./frontend/android
+        run: |
+          cat >> gradle.properties << 'EOF'
+          newArchEnabled=true
+          hermesEnabled=true
+          EOF
+
       - name: Fix MainApplication.kt
         working-directory: ./frontend
         run: |
           mkdir -p android/app/src/main/java/com/rfs2671/frontend
           cat > android/app/src/main/java/com/rfs2671/frontend/MainApplication.kt << 'EOF'
           package com.rfs2671.frontend
-          
+
           import android.app.Application
           import com.facebook.react.PackageList
           import com.facebook.react.ReactApplication
@@ -55,7 +63,7 @@ jobs:
           import com.facebook.soloader.SoLoader
           import expo.modules.ApplicationLifecycleDispatcher
           import expo.modules.ReactNativeHostWrapper
-          
+
           class MainApplication : Application(), ReactApplication {
             override val reactNativeHost: ReactNativeHost by lazy {
               ReactNativeHostWrapper(
@@ -63,12 +71,12 @@ jobs:
                 object : DefaultReactNativeHost(this) {
                   override fun getPackages(): List<ReactPackage> =
                     PackageList(this@MainApplication).packages
-          
+
                   override fun getUseDeveloperSupport(): Boolean = BuildConfig.DEBUG
                 }
               )
             }
-          
+
             override fun onCreate() {
               super.onCreate()
               SoLoader.init(this, false)
