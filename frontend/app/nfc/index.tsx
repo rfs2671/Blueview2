@@ -11,6 +11,7 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -19,18 +20,32 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 
+// DESIGN SYSTEM: Construction-grade colors
+// Deep Blue = Authority/Trust | Bright Green = Done/Success | Orange = Alert/Warning
 const COLORS = {
-  background: '#0A1929',
-  surface: '#132F4C',
-  surfaceLight: '#1E3A5F',
-  primary: '#FF6B00',
-  secondary: '#00D4FF',
-  success: '#4CAF50',
-  warning: '#FFB800',
-  danger: '#FF4444',
+  // Core backgrounds - dark, industrial, outdoor-ready
+  background: '#0D1B2A',      // Deep navy - authority
+  surface: '#1B263B',         // Elevated surface
+  surfaceLight: '#253649',    // Input fields
+  
+  // Action colors - bold, high contrast for sunlight
+  primary: '#00E676',         // Bright green - main CTA, success
+  primaryDark: '#00C853',     // Darker green for pressed states
+  secondary: '#2196F3',       // Trust blue - secondary actions
+  
+  // Status colors - clear, instant recognition
+  success: '#00E676',         // Bright green - done/complete
+  warning: '#FF9100',         // Orange - heads up/attention
+  danger: '#FF5252',          // Red - error/stop
+  
+  // Text - maximum outdoor readability
   text: '#FFFFFF',
-  textSecondary: '#B0BEC5',
-  border: '#2D4A6F',
+  textSecondary: '#90A4AE',
+  textMuted: '#607D8B',
+  
+  // Borders
+  border: '#37474F',
+  borderLight: '#455A64',
 };
 
 const PASSPORT_STORAGE_KEY = 'blueview_worker_passport';
