@@ -61,6 +61,7 @@ jobs:
           import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
           import com.facebook.react.defaults.DefaultReactNativeHost
           import com.facebook.soloader.SoLoader
+          import com.rfs2671.frontend.BuildConfig
           import expo.modules.ApplicationLifecycleDispatcher
           import expo.modules.ReactNativeHostWrapper
 
