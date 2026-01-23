@@ -1,47 +1,12 @@
-name: Build APK
-
-on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Install yarn
-        run: npm install -g yarn
-
-      - name: Install dependencies
-        working-directory: ./frontend
-        run: yarn install
-
-      - name: Clean android directory
-        working-directory: ./frontend
-        run: rm -rf android
-
-      - name: Prebuild for Android
+- name: Prebuild for Android
         working-directory: ./frontend
         run: npx expo prebuild --platform android
 
       - name: Fix MainApplication.kt
-        working-directory: ./frontend/android/app/src/main/java/com/rfs2671/frontend
+        working-directory: ./frontend
         run: |
-          cat > MainApplication.kt << 'EOF'
+          mkdir -p android/app/src/main/java/com/rfs2671/frontend
+          cat > android/app/src/main/java/com/rfs2671/frontend/MainApplication.kt << 'EOF'
           package com.rfs2671.frontend
 
           import android.app.Application
@@ -79,20 +44,3 @@ jobs:
       - name: Build APK with Gradle
         working-directory: ./frontend/android
         run: ./gradlew assembleRelease
-
-      - name: Upload APK
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release.apk
-          path: frontend/android/app/build/outputs/apk/release/app-release.apk
-          retention-days: 30
-
-      - name: Upload build logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: |
-            frontend/android/build/
-          retention-days: 7
