@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,6 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
-  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -19,33 +18,23 @@ import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
+import * as Haptics from 'expo-haptics';
+import SignatureCanvas from 'react-native-signature-canvas';
 
-// DESIGN SYSTEM: Construction-grade colors
-// Deep Blue = Authority/Trust | Bright Green = Done/Success | Orange = Alert/Warning
 const COLORS = {
-  // Core backgrounds - dark, industrial, outdoor-ready
-  background: '#0D1B2A',      // Deep navy - authority
-  surface: '#1B263B',         // Elevated surface
-  surfaceLight: '#253649',    // Input fields
-  
-  // Action colors - bold, high contrast for sunlight
-  primary: '#00E676',         // Bright green - main CTA, success
-  primaryDark: '#00C853',     // Darker green for pressed states
-  secondary: '#2196F3',       // Trust blue - secondary actions
-  
-  // Status colors - clear, instant recognition
-  success: '#00E676',         // Bright green - done/complete
-  warning: '#FF9100',         // Orange - heads up/attention
-  danger: '#FF5252',          // Red - error/stop
-  
-  // Text - maximum outdoor readability
+  background: '#0D1B2A',
+  surface: '#1B263B',
+  surfaceLight: '#253649',
+  primary: '#00E676',
+  primaryDark: '#00C853',
+  secondary: '#2196F3',
+  success: '#00E676',
+  warning: '#FF9100',
+  danger: '#FF5252',
   text: '#FFFFFF',
   textSecondary: '#90A4AE',
   textMuted: '#607D8B',
-  
-  // Borders
   border: '#37474F',
-  borderLight: '#455A64',
 };
 
 const PASSPORT_STORAGE_KEY = 'blueview_worker_passport';
@@ -66,7 +55,7 @@ interface WorkerPassport {
   trade: string;
   company: string;
   phone?: string;
-  osha_expiry_date?: string;
+  signature?: string;
 }
 
 interface CheckinResult {
@@ -91,6 +80,7 @@ type ScreenStatus =
   | 'create_passport' 
   | 'ocr_processing'
   | 'confirm_info'
+  | 'capture_signature'
   | 'auto_checkin' 
   | 'success' 
   | 'error';
@@ -98,6 +88,7 @@ type ScreenStatus =
 export default function NFCCheckinScreen() {
   const { tag } = useLocalSearchParams<{ tag: string }>();
   const router = useRouter();
+  const signatureRef = useRef<any>(null);
   
   const [status, setStatus] = useState<ScreenStatus>('loading');
   const [siteInfo, setSiteInfo] = useState<SiteInfo | null>(null);
@@ -105,7 +96,7 @@ export default function NFCCheckinScreen() {
   const [storedPassport, setStoredPassport] = useState<WorkerPassport | null>(null);
   const [checkinResult, setCheckinResult] = useState<CheckinResult | null>(null);
   
-  // New passport form fields
+  // Passport form fields
   const [oshaCardImage, setOshaCardImage] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [oshaNumber, setOshaNumber] = useState('');
@@ -113,11 +104,11 @@ export default function NFCCheckinScreen() {
   const [trade, setTrade] = useState('');
   const [company, setCompany] = useState('');
   const [phone, setPhone] = useState('');
+  const [signature, setSignature] = useState<string | null>(null);
   
   const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || 
     process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
-  // Load stored passport on mount
   useEffect(() => {
     initializeScreen();
   }, [tag]);
@@ -149,8 +140,18 @@ export default function NFCCheckinScreen() {
         const passport: WorkerPassport = JSON.parse(passportData);
         setStoredPassport(passport);
         
-        // Auto check-in for returning worker
-        await performAutoCheckin(passport, siteData);
+        // Verify passport exists on server
+        const verifyResponse = await fetch(`${API_URL}/api/passport/${passport.id}/verify`);
+        
+        if (verifyResponse.ok) {
+          // Auto check-in for returning worker
+          await performAutoCheckin(passport, siteData);
+        } else {
+          // Passport not found on server, clear local and create new
+          await AsyncStorage.removeItem(PASSPORT_STORAGE_KEY);
+          setStoredPassport(null);
+          setStatus('create_passport');
+        }
       } else {
         // New worker - needs to create passport
         setStatus('create_passport');
@@ -171,13 +172,13 @@ export default function NFCCheckinScreen() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tag_id: tag,
-          device_passport_id: passport.id,
+          passport_id: passport.id,
+          // Signature is stored on server, used for auto-signing log books
         }),
       });
 
       if (!response.ok) {
         const error = await response.json();
-        // If passport not found on server, clear local and create new
         if (response.status === 404) {
           await AsyncStorage.removeItem(PASSPORT_STORAGE_KEY);
           setStoredPassport(null);
@@ -191,6 +192,10 @@ export default function NFCCheckinScreen() {
       setCheckinResult(result);
       setStatus('success');
       
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+      
     } catch (error: any) {
       setStatus('error');
       setErrorMessage(error.message || 'Auto check-in failed');
@@ -198,13 +203,6 @@ export default function NFCCheckinScreen() {
   };
 
   const pickOSHACard = async () => {
-    const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
-    
-    if (!permissionResult.granted) {
-      Alert.alert('Permission Required', 'Camera permission is needed to scan your OSHA card');
-      return;
-    }
-
     Alert.alert(
       'Scan OSHA Card',
       'Take a clear photo of your OSHA 10/30 card',
@@ -212,6 +210,12 @@ export default function NFCCheckinScreen() {
         {
           text: 'Take Photo',
           onPress: async () => {
+            const { status } = await ImagePicker.requestCameraPermissionsAsync();
+            if (status !== 'granted') {
+              Alert.alert('Permission Required', 'Camera permission is needed');
+              return;
+            }
+            
             const result = await ImagePicker.launchCameraAsync({
               mediaTypes: ['images'],
               allowsEditing: true,
@@ -267,12 +271,23 @@ export default function NFCCheckinScreen() {
       setStatus('confirm_info');
       
     } catch (error) {
-      // If OCR fails, still let user enter info manually
       setStatus('confirm_info');
     }
   };
 
-  const createPassportAndCheckin = async () => {
+  const handleSignatureSaved = (signatureData: string) => {
+    setSignature(signatureData);
+    if (Platform.OS !== 'web') {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
+  };
+
+  const clearSignature = () => {
+    signatureRef.current?.clearSignature();
+    setSignature(null);
+  };
+
+  const proceedToSignature = () => {
     if (!name.trim()) {
       Alert.alert('Required', 'Please enter your name');
       return;
@@ -281,11 +296,19 @@ export default function NFCCheckinScreen() {
       Alert.alert('Required', 'Please enter your OSHA card number');
       return;
     }
+    setStatus('capture_signature');
+  };
+
+  const createPassportAndCheckin = async () => {
+    if (!signature) {
+      Alert.alert('Required', 'Please sign to continue');
+      return;
+    }
 
     setStatus('auto_checkin');
 
     try {
-      // Create passport on server
+      // Create passport on server (includes signature for auto-signing)
       const passportResponse = await fetch(`${API_URL}/api/passport/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -297,16 +320,18 @@ export default function NFCCheckinScreen() {
           company: company.trim() || '',
           phone: phone.trim() || null,
           osha_card_image: oshaCardImage,
+          signature: signature, // Stored on server for auto-signing log books
         }),
       });
 
       if (!passportResponse.ok) {
-        throw new Error('Failed to create passport');
+        const error = await passportResponse.json();
+        throw new Error(error.detail || 'Failed to create passport');
       }
 
       const passportResult = await passportResponse.json();
       
-      // Save passport locally
+      // Save passport locally for quick identification
       const localPassport: WorkerPassport = {
         id: passportResult.passport_id,
         name: name.trim(),
@@ -315,6 +340,7 @@ export default function NFCCheckinScreen() {
         trade: trade.trim() || 'General Labor',
         company: company.trim() || '',
         phone: phone.trim(),
+        signature: signature,
       };
       
       await AsyncStorage.setItem(PASSPORT_STORAGE_KEY, JSON.stringify(localPassport));
@@ -326,7 +352,7 @@ export default function NFCCheckinScreen() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tag_id: tag,
-          device_passport_id: passportResult.passport_id,
+          passport_id: passportResult.passport_id,
         }),
       });
 
@@ -337,6 +363,10 @@ export default function NFCCheckinScreen() {
       const result: CheckinResult = await checkinResponse.json();
       setCheckinResult(result);
       setStatus('success');
+
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
 
     } catch (error: any) {
       setStatus('error');
@@ -371,33 +401,31 @@ export default function NFCCheckinScreen() {
       case 'create_passport':
         return (
           <ScrollView style={styles.formScroll} contentContainerStyle={styles.formContent}>
-            {/* Site Info */}
             <View style={styles.siteCard}>
               <Ionicons name="location" size={28} color={COLORS.success} />
-              <Text style={styles.siteName}>{siteInfo?.project_name}</Text>
-              <Text style={styles.siteAddress}>{siteInfo?.project_address}</Text>
+              <View style={styles.siteCardInfo}>
+                <Text style={styles.siteName}>{siteInfo?.project_name}</Text>
+                <Text style={styles.siteAddress}>{siteInfo?.project_address}</Text>
+              </View>
             </View>
 
-            {/* Welcome Message */}
             <View style={styles.welcomeSection}>
               <Ionicons name="id-card" size={48} color={COLORS.primary} />
               <Text style={styles.welcomeTitle}>Create Your Worker Passport</Text>
               <Text style={styles.welcomeText}>
-                One-time setup. Scan your OSHA card and you'll never have to enter this info again!
+                One-time setup. Your info and signature will be saved for instant daily check-ins!
               </Text>
             </View>
 
-            {/* Scan OSHA Card Button */}
             <TouchableOpacity style={styles.scanButton} onPress={pickOSHACard}>
-              <Ionicons name="camera" size={32} color={COLORS.text} />
+              <Ionicons name="camera" size={32} color="#000" />
               <View style={styles.scanButtonTextContainer}>
                 <Text style={styles.scanButtonTitle}>Scan OSHA Card</Text>
                 <Text style={styles.scanButtonSubtitle}>We'll extract your info automatically</Text>
               </View>
-              <Ionicons name="chevron-forward" size={24} color={COLORS.textSecondary} />
+              <Ionicons name="chevron-forward" size={24} color="#000" />
             </TouchableOpacity>
 
-            {/* Manual Entry Option */}
             <TouchableOpacity 
               style={styles.manualButton}
               onPress={() => setStatus('confirm_info')}
@@ -423,13 +451,11 @@ export default function NFCCheckinScreen() {
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           >
             <ScrollView style={styles.formScroll} contentContainerStyle={styles.formContent}>
-              {/* Site Info Mini */}
               <View style={styles.siteCardMini}>
                 <Ionicons name="location" size={20} color={COLORS.success} />
                 <Text style={styles.siteNameMini}>{siteInfo?.project_name}</Text>
               </View>
 
-              {/* OSHA Card Preview */}
               {oshaCardImage && (
                 <View style={styles.cardPreview}>
                   <Image 
@@ -444,7 +470,7 @@ export default function NFCCheckinScreen() {
                 </View>
               )}
 
-              <Text style={styles.formTitle}>Confirm Your Information</Text>
+              <Text style={styles.formTitle}>Your Information</Text>
 
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Full Name *</Text>
@@ -525,16 +551,93 @@ export default function NFCCheckinScreen() {
                 />
               </View>
 
-              <TouchableOpacity style={styles.createButton} onPress={createPassportAndCheckin}>
-                <Ionicons name="checkmark-circle" size={24} color={COLORS.text} />
-                <Text style={styles.createButtonText}>Create Passport & Check In</Text>
+              <TouchableOpacity style={styles.nextButton} onPress={proceedToSignature}>
+                <Text style={styles.nextButtonText}>Next: Add Signature</Text>
+                <Ionicons name="arrow-forward" size={20} color="#000" />
               </TouchableOpacity>
-
-              <Text style={styles.privacyNote}>
-                Your passport is stored securely on your device. You won't need to enter this again.
-              </Text>
             </ScrollView>
           </KeyboardAvoidingView>
+        );
+
+      case 'capture_signature':
+        return (
+          <View style={styles.signatureScreen}>
+            <View style={styles.siteCardMini}>
+              <Ionicons name="location" size={20} color={COLORS.success} />
+              <Text style={styles.siteNameMini}>{siteInfo?.project_name}</Text>
+            </View>
+
+            <Text style={styles.signatureTitle}>Your Digital Signature</Text>
+            <Text style={styles.signatureSubtitle}>
+              This signature will be used to auto-sign daily log books when you check in
+            </Text>
+
+            <View style={styles.signatureContainer}>
+              {Platform.OS !== 'web' ? (
+                <SignatureCanvas
+                  ref={signatureRef}
+                  onOK={handleSignatureSaved}
+                  onEmpty={() => setSignature(null)}
+                  descriptionText=""
+                  clearText="Clear"
+                  confirmText="Save"
+                  webStyle={`
+                    .m-signature-pad { box-shadow: none; border: none; }
+                    .m-signature-pad--body { border: none; }
+                    .m-signature-pad--footer { display: none; }
+                    body { background-color: #ffffff; }
+                  `}
+                  backgroundColor="white"
+                  penColor="black"
+                  style={styles.signaturePad}
+                />
+              ) : (
+                <View style={styles.webSignaturePlaceholder}>
+                  <Text style={styles.webSignatureText}>
+                    Signature capture requires mobile device
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.signatureActions}>
+              <TouchableOpacity style={styles.clearSigButton} onPress={clearSignature}>
+                <Ionicons name="refresh" size={20} color={COLORS.text} />
+                <Text style={styles.clearSigText}>Clear</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.saveSigButton} 
+                onPress={() => signatureRef.current?.readSignature()}
+              >
+                <Ionicons name="checkmark" size={20} color={COLORS.text} />
+                <Text style={styles.saveSigText}>Confirm Signature</Text>
+              </TouchableOpacity>
+            </View>
+
+            {signature && (
+              <View style={styles.signaturePreview}>
+                <Ionicons name="checkmark-circle" size={24} color={COLORS.success} />
+                <Text style={styles.signaturePreviewText}>Signature captured!</Text>
+              </View>
+            )}
+
+            <TouchableOpacity 
+              style={[styles.createButton, !signature && styles.createButtonDisabled]} 
+              onPress={createPassportAndCheckin}
+              disabled={!signature}
+            >
+              <Ionicons name="checkmark-circle" size={24} color="#000" />
+              <Text style={styles.createButtonText}>Create Passport & Check In</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={styles.backToInfoButton}
+              onPress={() => setStatus('confirm_info')}
+            >
+              <Text style={styles.backToInfoText}>← Back to edit info</Text>
+            </TouchableOpacity>
+          </View>
         );
 
       case 'success':
@@ -549,7 +652,7 @@ export default function NFCCheckinScreen() {
             </Text>
             
             <View style={styles.resultCard}>
-              <Text style={styles.resultName}>{checkinResult?.worker_name}</Text>
+              <Text style={styles.resultName}>{checkinResult?.worker_name || storedPassport?.name}</Text>
               <View style={styles.resultDivider} />
               
               <View style={styles.resultRow}>
@@ -567,10 +670,9 @@ export default function NFCCheckinScreen() {
               </View>
             </View>
 
-            {/* Books Signed Summary */}
             {checkinResult?.books_signed && !checkinResult.already_checked_in && (
               <View style={styles.booksSignedCard}>
-                <Text style={styles.booksTitle}>✅ All Books Signed</Text>
+                <Text style={styles.booksTitle}>✅ All Books Auto-Signed</Text>
                 <View style={styles.bookItem}>
                   <Ionicons name="document-text" size={16} color={COLORS.success} />
                   <Text style={styles.bookText}>Daily Sign-In Sheet</Text>
@@ -603,21 +705,20 @@ export default function NFCCheckinScreen() {
             <Text style={styles.errorTitle}>Something Went Wrong</Text>
             <Text style={styles.errorMessage}>{errorMessage}</Text>
             
-            <TouchableOpacity style={styles.retryButton} onPress={initializeScreen}>
+            <TouchableOpacity style={styles.retryButtonLarge} onPress={initializeScreen}>
               <Ionicons name="refresh" size={20} color={COLORS.text} />
-              <Text style={styles.retryText}>Try Again</Text>
+              <Text style={styles.retryTextLarge}>Try Again</Text>
             </TouchableOpacity>
 
-            {/* Option to clear passport and start fresh */}
             <TouchableOpacity 
-              style={styles.clearButton}
+              style={styles.resetButton}
               onPress={async () => {
                 await AsyncStorage.removeItem(PASSPORT_STORAGE_KEY);
                 setStoredPassport(null);
                 initializeScreen();
               }}
             >
-              <Text style={styles.clearButtonText}>Reset & Create New Passport</Text>
+              <Text style={styles.resetButtonText}>Reset & Create New Passport</Text>
             </TouchableOpacity>
           </View>
         );
@@ -629,23 +730,21 @@ export default function NFCCheckinScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerContent}>
           <View style={styles.logoContainer}>
             <Ionicons name="construct" size={28} color={COLORS.primary} />
             <Text style={styles.logoText}>BLUEVIEW</Text>
           </View>
-          <Text style={styles.headerSubtitle}>Worker Passport</Text>
+          <Text style={styles.headerSubtitle}>Worker Check-In</Text>
         </View>
       </View>
 
       {renderContent()}
 
-      {/* Footer */}
       <View style={styles.footer}>
         <Text style={styles.footerText}>
-          NYC DOB Compliant • Your data is secure
+          NYC DOB Compliant • Your signature is securely stored
         </Text>
       </View>
     </SafeAreaView>
@@ -657,7 +756,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background,
   },
-  // HEADER - Compact, professional
   header: {
     paddingVertical: 16,
     paddingHorizontal: 20,
@@ -684,10 +782,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: COLORS.textSecondary,
     marginTop: 4,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
   },
-  // CENTER CONTENT - Loading states
   centerContent: {
     flex: 1,
     justifyContent: 'center',
@@ -715,7 +810,6 @@ const styles = StyleSheet.create({
     borderWidth: 4,
     borderColor: COLORS.success,
   },
-  // FORM LAYOUT
   formScroll: {
     flex: 1,
   },
@@ -723,23 +817,24 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 40,
   },
-  // SITE CARD - Job site info
   siteCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 20,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
+    backgroundColor: COLORS.surface,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 20,
+    gap: 12,
     borderLeftWidth: 4,
     borderLeftColor: COLORS.success,
+  },
+  siteCardInfo: {
+    flex: 1,
   },
   siteName: {
     fontSize: 18,
     fontWeight: '800',
     color: COLORS.text,
-    flex: 1,
   },
   siteAddress: {
     fontSize: 13,
@@ -760,332 +855,379 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: COLORS.textSecondary,
   },
-  // WELCOME SECTION - First time setup
   welcomeSection: {
     alignItems: 'center',
-    paddingVertical: 32,
+    paddingVertical: 24,
   },
   welcomeTitle: {
-    fontSize: 26,
+    fontSize: 24,
     fontWeight: '800',
     color: COLORS.text,
     marginTop: 16,
     textAlign: 'center',
   },
   welcomeText: {
-    fontSize: 16,
+    fontSize: 15,
     color: COLORS.textSecondary,
     textAlign: 'center',
-    marginTop: 12,
-    paddingHorizontal: 12,
-    lineHeight: 24,
+    marginTop: 10,
+    lineHeight: 22,
   },
-  // SCAN BUTTON - Primary CTA, massive touch target
   scanButton: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.primary,
     borderRadius: 16,
-    padding: 24,
-    gap: 16,
-    minHeight: 88, // Massive for gloved hands
-    shadowColor: COLORS.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
+    padding: 20,
+    gap: 14,
+    minHeight: 80,
   },
   scanButtonTextContainer: {
     flex: 1,
   },
   scanButtonTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '800',
     color: '#000',
   },
   scanButtonSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#000000AA',
-    marginTop: 4,
-    fontWeight: '500',
+    marginTop: 2,
   },
-  // MANUAL ENTRY LINK
   manualButton: {
     alignItems: 'center',
-    paddingVertical: 24,
-    paddingHorizontal: 20,
-    minHeight: 60,
+    paddingVertical: 20,
   },
   manualButtonText: {
     fontSize: 16,
     fontWeight: '600',
     color: COLORS.secondary,
   },
-  // CARD PREVIEW - OSHA card image
   cardPreview: {
     backgroundColor: COLORS.surface,
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 12,
+    padding: 12,
     marginBottom: 20,
     alignItems: 'center',
   },
   cardImage: {
     width: '100%',
-    height: 160,
-    borderRadius: 12,
+    height: 140,
+    borderRadius: 8,
   },
   retakeButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    backgroundColor: COLORS.surfaceLight,
-    borderRadius: 8,
-    minHeight: 48,
+    marginTop: 10,
+    padding: 10,
   },
   retakeText: {
     fontSize: 14,
-    fontWeight: '600',
     color: COLORS.text,
   },
-  // FORM ELEMENTS
   formTitle: {
-    fontSize: 22,
-    fontWeight: '800',
+    fontSize: 20,
+    fontWeight: '700',
     color: COLORS.text,
-    marginBottom: 20,
+    marginBottom: 16,
   },
   inputGroup: {
-    marginBottom: 18,
+    marginBottom: 16,
   },
   label: {
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '600',
     color: COLORS.textSecondary,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    marginBottom: 6,
   },
   input: {
     backgroundColor: COLORS.surfaceLight,
     borderRadius: 12,
-    paddingHorizontal: 18,
-    paddingVertical: 18,
-    fontSize: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
     color: COLORS.text,
-    borderWidth: 2,
+    borderWidth: 1,
     borderColor: COLORS.border,
-    minHeight: 60, // Large touch target
   },
-  // CARD TYPE SELECTOR
   cardTypeRow: {
     flexDirection: 'row',
-    gap: 16,
+    gap: 12,
   },
   cardTypeButton: {
     flex: 1,
-    paddingVertical: 18,
-    borderRadius: 12,
+    paddingVertical: 14,
+    borderRadius: 10,
     backgroundColor: COLORS.surface,
     alignItems: 'center',
-    borderWidth: 3,
+    borderWidth: 2,
     borderColor: COLORS.border,
-    minHeight: 60,
-    justifyContent: 'center',
   },
   cardTypeSelected: {
     borderColor: COLORS.primary,
-    backgroundColor: COLORS.primary + '25',
+    backgroundColor: COLORS.primary + '20',
   },
   cardTypeText: {
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 15,
+    fontWeight: '600',
     color: COLORS.textSecondary,
   },
   cardTypeTextSelected: {
     color: COLORS.primary,
   },
-  // CREATE BUTTON - Big green CTA
+  nextButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.primary,
+    borderRadius: 12,
+    paddingVertical: 16,
+    gap: 8,
+    marginTop: 8,
+  },
+  nextButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#000',
+  },
+  signatureScreen: {
+    flex: 1,
+    padding: 20,
+  },
+  signatureTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: COLORS.text,
+    textAlign: 'center',
+    marginTop: 10,
+  },
+  signatureSubtitle: {
+    fontSize: 14,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 20,
+  },
+  signatureContainer: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    height: 200,
+    overflow: 'hidden',
+  },
+  signaturePad: {
+    flex: 1,
+  },
+  webSignaturePlaceholder: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  webSignatureText: {
+    color: COLORS.textMuted,
+  },
+  signatureActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+  },
+  clearSigButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.surface,
+    borderRadius: 10,
+    paddingVertical: 12,
+    gap: 6,
+  },
+  clearSigText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.text,
+  },
+  saveSigButton: {
+    flex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.secondary,
+    borderRadius: 10,
+    paddingVertical: 12,
+    gap: 6,
+  },
+  saveSigText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.text,
+  },
+  signaturePreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 12,
+    gap: 8,
+  },
+  signaturePreviewText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: COLORS.success,
+  },
   createButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: COLORS.primary,
-    borderRadius: 16,
-    paddingVertical: 22,
-    marginTop: 12,
-    gap: 12,
-    minHeight: 72,
-    shadowColor: COLORS.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 8,
+    borderRadius: 12,
+    paddingVertical: 18,
+    marginTop: 20,
+    gap: 10,
+  },
+  createButtonDisabled: {
+    opacity: 0.5,
   },
   createButtonText: {
-    fontSize: 20,
+    fontSize: 17,
     fontWeight: '800',
     color: '#000',
   },
-  privacyNote: {
-    fontSize: 13,
-    color: COLORS.textMuted,
-    textAlign: 'center',
-    marginTop: 16,
-    lineHeight: 20,
+  backToInfoButton: {
+    alignItems: 'center',
+    paddingVertical: 16,
   },
-  // SUCCESS SCREEN - Celebratory but professional
+  backToInfoText: {
+    fontSize: 15,
+    color: COLORS.secondary,
+  },
   successIcon: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    backgroundColor: COLORS.success + '25',
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: COLORS.success + '20',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 24,
-    borderWidth: 4,
-    borderColor: COLORS.success,
+    marginBottom: 20,
   },
   successTitle: {
-    fontSize: 32,
-    fontWeight: '900',
+    fontSize: 28,
+    fontWeight: '800',
     color: COLORS.success,
-    marginBottom: 20,
-    textAlign: 'center',
+    marginBottom: 16,
   },
   resultCard: {
     backgroundColor: COLORS.surface,
-    borderRadius: 20,
-    padding: 24,
+    borderRadius: 16,
+    padding: 20,
     width: '100%',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: COLORS.border,
   },
   resultName: {
-    fontSize: 28,
-    fontWeight: '900',
+    fontSize: 24,
+    fontWeight: '800',
     color: COLORS.text,
-    textAlign: 'center',
   },
   resultDivider: {
     width: '100%',
-    height: 2,
+    height: 1,
     backgroundColor: COLORS.border,
-    marginVertical: 18,
+    marginVertical: 14,
   },
   resultRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginBottom: 10,
+    gap: 10,
+    marginBottom: 8,
   },
   resultText: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
     color: COLORS.text,
   },
-  // BOOKS SIGNED CARD
   booksSignedCard: {
     backgroundColor: COLORS.success + '15',
-    borderRadius: 16,
-    padding: 20,
+    borderRadius: 12,
+    padding: 16,
     width: '100%',
-    marginTop: 20,
-    borderWidth: 2,
-    borderColor: COLORS.success + '50',
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: COLORS.success + '40',
   },
   booksTitle: {
-    fontSize: 18,
-    fontWeight: '800',
+    fontSize: 16,
+    fontWeight: '700',
     color: COLORS.success,
-    marginBottom: 14,
+    marginBottom: 10,
   },
   bookItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginBottom: 10,
-    paddingVertical: 4,
+    gap: 10,
+    marginBottom: 6,
   },
   bookText: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '500',
     color: COLORS.text,
   },
   successNote: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15,
     color: COLORS.textSecondary,
-    marginTop: 24,
-    textAlign: 'center',
+    marginTop: 20,
   },
-  // ERROR SCREEN
   errorIcon: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
+    width: 130,
+    height: 130,
+    borderRadius: 65,
     backgroundColor: COLORS.danger + '20',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 20,
-    borderWidth: 4,
-    borderColor: COLORS.danger,
+    marginBottom: 16,
   },
   errorTitle: {
-    fontSize: 26,
-    fontWeight: '800',
+    fontSize: 24,
+    fontWeight: '700',
     color: COLORS.danger,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   errorMessage: {
-    fontSize: 16,
+    fontSize: 15,
     color: COLORS.textSecondary,
     textAlign: 'center',
     paddingHorizontal: 20,
-    lineHeight: 24,
   },
-  retryButton: {
+  retryButtonLarge: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.secondary,
-    paddingHorizontal: 32,
-    paddingVertical: 18,
-    borderRadius: 14,
-    marginTop: 28,
-    gap: 10,
-    minHeight: 60,
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 12,
+    marginTop: 24,
+    gap: 8,
   },
-  retryText: {
-    fontSize: 18,
-    fontWeight: '700',
+  retryTextLarge: {
+    fontSize: 16,
+    fontWeight: '600',
     color: COLORS.text,
   },
-  clearButton: {
-    marginTop: 20,
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    minHeight: 52,
+  resetButton: {
+    marginTop: 16,
+    padding: 12,
   },
-  clearButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
+  resetButtonText: {
+    fontSize: 14,
     color: COLORS.textMuted,
   },
-  // FOOTER
   footer: {
-    paddingVertical: 16,
+    paddingVertical: 14,
     alignItems: 'center',
-    borderTopWidth: 2,
+    borderTopWidth: 1,
     borderTopColor: COLORS.border,
     backgroundColor: COLORS.surface,
   },
   footerText: {
     fontSize: 12,
-    fontWeight: '600',
     color: COLORS.textSecondary,
-    letterSpacing: 0.5,
   },
 });
