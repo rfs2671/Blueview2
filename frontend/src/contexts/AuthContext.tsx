@@ -3,8 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
-const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || 
-  process.env.EXPO_PUBLIC_BACKEND_URL || '';
+const API_URL = const API_URL = 'https://blueview2-production.up.railway.app';
 
 interface User {
   id: string;
