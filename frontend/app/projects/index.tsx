@@ -77,8 +77,7 @@ export default function ProjectsScreen() {
   const [showAddNfcModal, setShowAddNfcModal] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
 
-  const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || 
-    process.env.EXPO_PUBLIC_BACKEND_URL || '';
+  const API_URL = 'https://blueview2-production.up.railway.app';
 
   useEffect(() => {
     checkNfcSupport();
