@@ -2737,6 +2737,43 @@ def get_passport_by_osha(osha_number: str):
         raise HTTPException(status_code=404, detail="Passport not found")
     return serialize_doc(passport)
 
+@app.get("/api/passport/registered-workers")
+def get_registered_workers(current_user: dict = Depends(require_admin)):
+    """Admin endpoint - Get all registered worker passports"""
+    passports = list(worker_passports_collection.find({"is_active": True}).sort("created_at", -1))
+    
+    result = []
+    for p in passports:
+        result.append({
+            "id": str(p["_id"]),
+            "name": p.get("name", ""),
+            "osha_number": p.get("osha_number", ""),
+            "osha_card_type": p.get("osha_card_type", "10"),
+            "trade": p.get("trade", ""),
+            "company": p.get("company", ""),
+            "phone": p.get("phone"),
+            "total_checkins": p.get("total_checkins", 0),
+            "sites_visited": len(p.get("sites_visited", [])),
+            "last_checkin": p.get("last_checkin").isoformat() if p.get("last_checkin") else None,
+            "created_at": p.get("created_at").isoformat() if p.get("created_at") else None
+        })
+    
+    return result
+
+@app.delete("/api/passport/{passport_id}")
+def delete_worker_passport(passport_id: str, current_user: dict = Depends(require_admin)):
+    """Admin endpoint - Delete/deactivate a worker passport"""
+    try:
+        result = worker_passports_collection.update_one(
+            {"_id": ObjectId(passport_id)},
+            {"$set": {"is_active": False, "deactivated_at": datetime.utcnow(), "deactivated_by": current_user["id"]}}
+        )
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Passport not found")
+        return {"message": "Passport deactivated successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.post("/api/passport/checkin")
 def passport_nfc_checkin(checkin: NFCPassportCheckinRequest):
     """
