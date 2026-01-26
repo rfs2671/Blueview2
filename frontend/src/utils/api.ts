@@ -1,8 +1,7 @@
 import Constants from 'expo-constants';
 
 const getApiUrl = () => {
-  return Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || 
-    process.env.EXPO_PUBLIC_BACKEND_URL || '';
+  return 'https://blueview2-production.up.railway.app';
 };
 
 export const API_URL = getApiUrl();
