@@ -133,28 +133,51 @@ export default function OwnerPortal() {
   };
 
   const handleDeleteAdmin = async (adminId: string, companyName: string) => {
+  const message = `Are you sure you want to delete the admin account for ${companyName}? This will remove all their data.`;
+
+  // Helper function to perform the actual deletion logic
+  const performDelete = async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/owner/admins/${adminId}?owner_key=${OWNER_PASSWORD}`, {
+        method: 'DELETE',
+      });
+      
+      if (response.ok) {
+        fetchAdmins(); // Refresh the list after successful deletion
+      } else {
+        const errorData = await response.json();
+        Alert.alert('Error', errorData.detail || 'Failed to delete admin');
+      }
+    } catch (error) {
+      console.log('Error deleting admin:', error);
+      if (Platform.OS !== 'web') {
+        Alert.alert('Error', 'Network error. Failed to delete admin.');
+      }
+    }
+  };
+
+  // Platform-specific confirmation logic
+  if (Platform.OS === 'web') {
+    // Browser confirmation
+    if (window.confirm(message)) {
+      await performDelete();
+    }
+  } else {
+    // Native Mobile Alert
     Alert.alert(
       'Delete Admin Account',
-      `Are you sure you want to delete the admin account for ${companyName}? This will remove all their data.`,
+      message,
       [
         { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await fetch(`${API_URL}/api/owner/admins/${adminId}?owner_key=${OWNER_PASSWORD}`, {
-                method: 'DELETE',
-              });
-              fetchAdmins();
-            } catch (error) {
-              Alert.alert('Error', 'Failed to delete admin');
-            }
-          },
+        { 
+          text: 'Delete', 
+          style: 'destructive', 
+          onPress: performDelete 
         },
       ]
     );
-  };
+  }
+};
 
   // Owner login screen
   if (!isAuthenticated) {
