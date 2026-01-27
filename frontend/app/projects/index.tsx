@@ -332,38 +332,54 @@ export default function ProjectsScreen() {
     }
   };
 
-  const handleDeleteProject = (project: Project) => {
+const handleDeleteProject = (project: Project) => {
+  const message = `Are you sure you want to delete "${project.name}"?`;
+
+  // Define the actual deletion logic once
+  const executeDeletion = async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/projects/${project.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to delete project');
+      }
+      
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+      fetchProjects();
+    } catch (error) {
+      if (Platform.OS === 'web') {
+        alert('Error: Failed to delete project');
+      } else {
+        Alert.alert('Error', 'Failed to delete project');
+      }
+    }
+  };
+
+  // Platform-specific confirmation check
+  if (Platform.OS === 'web') {
+    if (window.confirm(message)) {
+      executeDeletion();
+    }
+  } else {
     Alert.alert(
       'Delete Project',
-      `Are you sure you want to delete "${project.name}"?`,
+      message,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: async () => {
-            try {
-              const response = await fetch(`${API_URL}/api/projects/${project.id}`, {
-                method: 'DELETE',
-                headers: { Authorization: `Bearer ${token}` },
-              });
-              
-              if (!response.ok) {
-                throw new Error('Failed to delete project');
-              }
-              
-              if (Platform.OS !== 'web') {
-                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              }
-              fetchProjects();
-            } catch (error) {
-              Alert.alert('Error', 'Failed to delete project');
-            }
-          },
+          onPress: executeDeletion,
         },
       ]
     );
-  };
+  }
+};
 
   const openAddNfcModal = async (project: Project) => {
     setSelectedProject(project);
