@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "scheme": "blueview",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.blueview.passport",
