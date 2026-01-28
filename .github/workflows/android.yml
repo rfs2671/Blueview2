@@ -42,6 +42,13 @@ jobs:
         working-directory: ./frontend
         run: npx expo prebuild --platform android
 
+      - name: Enable New Architecture
+        working-directory: ./frontend/android
+        run: |
+          cat >> gradle.properties << 'EOF'
+          newArchEnabled=true
+          EOF
+
       - name: Build APK
         working-directory: ./frontend/android
         run: ./gradlew assembleDebug
