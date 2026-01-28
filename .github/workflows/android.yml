@@ -42,70 +42,13 @@ jobs:
         working-directory: ./frontend
         run: npx expo prebuild --platform android
 
-      - name: Enable New Architecture
+      - name: Build APK
         working-directory: ./frontend/android
-        run: |
-          cat >> gradle.properties << 'EOF'
-          newArchEnabled=true
-          hermesEnabled=true
-          EOF
-
-      - name: Fix MainApplication.kt
-        working-directory: ./frontend
-        run: |
-          mkdir -p android/app/src/main/java/com/blueview/passport
-          cat > android/app/src/main/java/com/blueview/passport/MainApplication.kt << 'KOTLIN'
-          package com.blueview.passport
-
-          import android.app.Application
-          import com.facebook.react.PackageList
-          import com.facebook.react.ReactApplication
-          import com.facebook.react.ReactNativeHost
-          import com.facebook.react.ReactPackage
-          import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
-          import com.facebook.react.defaults.DefaultReactNativeHost
-          import com.facebook.soloader.SoLoader
-          import com.blueview.passport.BuildConfig
-          import expo.modules.ApplicationLifecycleDispatcher
-          import expo.modules.ReactNativeHostWrapper
-
-          class MainApplication : Application(), ReactApplication {
-            override val reactNativeHost: ReactNativeHost by lazy {
-              ReactNativeHostWrapper(
-                this,
-                object : DefaultReactNativeHost(this) {
-                  override fun getPackages(): List<ReactPackage> =
-                    PackageList(this@MainApplication).packages
-
-                  override fun getUseDeveloperSupport(): Boolean = BuildConfig.DEBUG
-                }
-              )
-            }
-
-            override fun onCreate() {
-              super.onCreate()
-              SoLoader.init(this, false)
-              ApplicationLifecycleDispatcher.onApplicationCreate(this)
-            }
-          }
-          KOTLIN
-
-      - name: Build APK with Gradle
-        working-directory: ./frontend/android
-        run: ./gradlew assembleRelease
+        run: ./gradlew assembleDebug
 
       - name: Upload APK
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: app-release.apk
-          path: frontend/android/app/build/outputs/apk/release/app-release.apk
+          name: app-debug.apk
+          path: frontend/android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
-
-      - name: Upload build logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: frontend/android/build/
-          retention-days: 7
