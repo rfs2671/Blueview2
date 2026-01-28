@@ -39,6 +39,9 @@
       "expo-secure-store",
       "expo-font",
       "expo-web-browser"
+      "react-native-nfc-manager",
+      "expo-camera",
+      "expo-location"
     ],
     "experiments": {
       "typedRoutes": true
