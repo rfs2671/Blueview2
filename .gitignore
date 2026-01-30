@@ -97,3 +97,11 @@ android-sdk/ -e
 # Environment files
 *.env
 *.env.*
+
+
+# Expo temporary files
+.expo/
+
+# Native Android and iOS directories (Crucial for CNG)
+android/
+ios/
